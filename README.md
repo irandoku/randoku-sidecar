@@ -1,5 +1,7 @@
 # hermes-gpt
 
+![Hermes GPT branding](assets/hermes-gpt-branding.jpg)
+
 `hermes-gpt` is a standalone MCP sidecar for Hermes Agent. It imports selected local Hermes Agent internals at runtime and exposes them to MCP clients without modifying Hermes Agent source files.
 
 This is a **local-dev release**. It is not a hosted service, not a fork of Hermes Agent, not a generic remote dev container, and not a replacement for DevSpace.
