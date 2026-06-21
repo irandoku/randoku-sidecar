@@ -6,6 +6,40 @@
 
 This is a **local-dev release**. It is not a hosted service, not a fork of Hermes Agent, not a generic remote dev container, and not a replacement for DevSpace.
 
+## What’s New in v0.2.0
+
+v0.2.0 adds tiered Operator / Owner Mode so trusted MCP clients can see the full Hermes GPT surface while the default posture stays safe.
+
+- Default mode remains read-only.
+- Recommended always-on connector/tunnel mode is `dry_run`.
+- Direct mutation requires both:
+  - `HERMES_GPT_OPERATOR_APPLY_MODE=direct`
+  - the mutating tool call sets `dry_run=false`
+- Owner Mode requires the exact break-glass acknowledgement:
+  - `HERMES_GPT_OWNER_ACK=I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE`
+- Operator Mode is not a sandbox.
+- Do not expose publicly without real auth, VPN, Tailscale, or an equivalent private boundary.
+
+What v0.2.0 adds:
+
+- operator policy, status, and audit tools
+- cron tools
+- skill tools
+- config and env tools
+- gateway tools
+- workspace tools
+- owner tools behind explicit acknowledgement
+- audit logging with hashes and lengths instead of raw prompt/content
+- Hermes data-root normalization for operator profile operations
+- packaging fixes so operator modules ship in the release
+
+| Mode | Env posture | What happens |
+| --- | --- | --- |
+| Read-only | no operator env vars | read/list/status tools only; mutations refuse |
+| Dry-run Operator | operator enabled + apply_mode=dry_run | mutation tools return plans/previews only |
+| Direct Operator | operator enabled + apply_mode=direct | writes allowed only when tool call also sets `dry_run=false` |
+| Owner Mode | level=owner + exact owner ack | break-glass local owner tools; still denies secret paths |
+
 For the full Operator Mode guide, new-user quickstart, and tunnel safety model, see `docs/operator-mode.md`.
 
 ## Security posture
