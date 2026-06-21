@@ -43,15 +43,45 @@ def test_default_tool_surface_is_read_or_local_metadata_only(monkeypatch):
     built = server.build_server()
     names = tool_names(built)
 
-    assert names == sorted(
-        [
-            "hermes_memory",
-            "hermes_read_file",
-            "hermes_search_files",
-            "hermes_skill_list",
-            "hermes_skill_view",
-        ]
-    )
+    # Original read-only / local-metadata tools must still be present.
+    for required in [
+        "hermes_memory",
+        "hermes_read_file",
+        "hermes_search_files",
+        "hermes_skill_list",
+        "hermes_skill_view",
+    ]:
+        assert required in names
+
+    # Broad mutating tools must NOT be exposed without their env flags.
+    for forbidden in [
+        "hermes_write_file",
+        "hermes_patch",
+        "hermes_run_command",
+        "hermes_session_search",
+    ]:
+        assert forbidden not in names
+
+    # Operator / Owner Mode tools are always registered (with refusal when
+    # the policy is disabled). Verify the core read-only + representative
+    # mutating tools are present.
+    for operator_tool in [
+        "hermes_operator_policy",
+        "hermes_operator_status",
+        "hermes_operator_audit_tail",
+        "hermes_cron_list",
+        "hermes_cron_status",
+        "hermes_skill_diff",
+        "hermes_config_get",
+        "hermes_env_status",
+        "hermes_gateway_status",
+        "hermes_git_status",
+        "hermes_git_diff",
+        "hermes_cron_run",
+        "hermes_skill_create",
+        "hermes_owner_run_command",
+    ]:
+        assert operator_tool in names
 
     for tool in tools_by_name(built).values():
         assert tool.meta == {"securitySchemes": [{"type": "noauth"}]}

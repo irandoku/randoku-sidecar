@@ -3,10 +3,17 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import inspect
+import json
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+import operator_policy as op_policy
+import operator_cron as op_cron
+import operator_skills as op_skills
+import operator_config as op_config
+import operator_workspace as op_workspace
 
 
 LOCAL_DEV_PROFILE = "local-dev"
@@ -363,8 +370,15 @@ def hermes_skill_list() -> str:
         skills = discover_skills()
         if not skills:
             return "No Hermes skills found."
-        lines = []
+        # Deduplicate by name, keeping the first (user-level skills take priority)
+        seen_names: set[str] = set()
+        unique_skills: list[dict[str, str]] = []
         for skill in skills:
+            if skill["name"].lower() not in seen_names:
+                seen_names.add(skill["name"].lower())
+                unique_skills.append(skill)
+        lines = []
+        for skill in unique_skills:
             desc = f" - {skill['description']}" if skill["description"] else ""
             lines.append(f"- {skill['name']}{desc}\n  {skill['path']}")
         return "\n".join(lines)
@@ -384,7 +398,14 @@ def hermes_skill_view(name: str) -> str:
             return f"No skill matched {name!r}."
         if len(matches) > 1:
             return "Multiple skills matched:\n" + "\n".join(f"- {m['name']}: {m['path']}" for m in matches)
-        return Path(matches[0]["path"]).read_text(encoding="utf-8", errors="replace")
+        skill_path = Path(matches[0]["path"])
+        # Size guard: if file > 80KB, return bounded chunk with guidance
+        MAX_VIEW_BYTES = 80_000
+        file_size = skill_path.stat().st_size
+        if file_size > MAX_VIEW_BYTES:
+            text = skill_path.read_text(encoding="utf-8", errors="replace")
+            return text[:MAX_VIEW_BYTES] + f"\n\n--- TRUNCATED (showing {MAX_VIEW_BYTES} of {file_size} bytes). Use hermes_read_file for specific sections. ---"
+        return skill_path.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
         raise clean_error("hermes_skill_view", exc) from exc
 
@@ -411,6 +432,424 @@ def hermes_session_search(query: str, limit: int = 20, offset: int = 0) -> str:
         message = f"Hermes session search is unavailable in this install: {exc}"
         eprint(f"hermes-gpt: {message}")
         return message
+
+
+# ---------------------------------------------------------------------------
+# Operator / Owner Mode tools
+# ---------------------------------------------------------------------------
+#
+# These wrap the operator_* modules. They are registered unconditionally
+# (so MCP clients can see them and understand why they refuse), but
+# mutating tools refuse unless the operator policy is explicitly enabled.
+#
+# Read-only tools (policy/status/audit_tail, cron list/status, skill diff,
+# config get, env status, gateway status, git status/diff) work at any
+# enabled level. Mutating tools refuse without sufficient level + apply_mode.
+
+
+def _hermes_root_for_operator() -> Path | None:
+    """Return the Hermes root to scope operator operations.
+
+    Falls back to the default Hermes root path if Hermes imports failed
+    but the standard install location exists.
+    """
+    if HERMES_ROOT:
+        return HERMES_ROOT
+    env_home = os.environ.get("HERMES_HOME")
+    if env_home:
+        return Path(env_home).expanduser()
+    candidates = [
+        Path.home() / "AppData" / "Local" / "hermes" / "hermes-agent",
+        Path.home() / ".hermes" / "hermes-agent",
+        Path.home() / ".hermes",
+    ]
+    for cand in candidates:
+        try:
+            if cand.is_dir():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def _default_hermes_root() -> Path | None:
+    """Return the default Hermes root path (the data root, not the agent source)."""
+    env_home = os.environ.get("HERMES_HOME")
+    if env_home:
+        return Path(env_home).expanduser()
+    # The Hermes data root is ~/.hermes (Windows: ~/AppData/Local/hermes).
+    # The agent source root lives next to it under hermes-agent/ and is not
+    # the same path.
+    for cand in [
+        Path.home() / "AppData" / "Local" / "hermes",
+        Path.home() / ".hermes",
+    ]:
+        try:
+            if cand.is_dir():
+                return cand
+        except OSError:
+            continue
+    # Final fallback: ~/.hermes even if it doesn't exist (so tests that
+    # monkeypatch this can still pass profile_root into the operator tools).
+    return Path.home() / ".hermes"
+
+
+def _active_profile_name() -> str:
+    """Return the active Hermes profile name, or 'default'."""
+    try:
+        env_home = os.environ.get("HERMES_HOME")
+        if env_home:
+            p = Path(env_home).expanduser().resolve()
+            parts = p.parts
+            if "profiles" in parts:
+                idx = parts.index("profiles")
+                if idx + 1 < len(parts):
+                    return parts[idx + 1]
+        return "default"
+    except Exception:
+        return "default"
+
+
+# --- Policy / status / audit (always registered, read-only) ---------------
+
+
+def hermes_operator_policy() -> str:
+    """Return the current operator policy summary. Read-only. Never secrets."""
+    try:
+        policy = op_policy.OperatorPolicy()
+        summary = policy.to_summary()
+        summary["success"] = True
+        return json.dumps(summary, indent=2)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+def hermes_operator_status() -> str:
+    """Return operator runtime status. Read-only. Never secrets."""
+    try:
+        policy = op_policy.OperatorPolicy()
+        project_path = str(Path(__file__).resolve().parent)
+        agent_root = str(HERMES_ROOT) if HERMES_ROOT else None
+        default_root = str(_default_hermes_root()) if _default_hermes_root() else None
+        active_profile = _active_profile_name()
+
+        # Discover registered operator tools by checking this module's
+        # attributes. We list the names we explicitly register below.
+        registered = [
+            "hermes_operator_policy",
+            "hermes_operator_status",
+            "hermes_operator_audit_tail",
+            "hermes_cron_list",
+            "hermes_cron_status",
+            "hermes_skill_diff",
+            "hermes_config_get",
+            "hermes_env_status",
+            "hermes_gateway_status",
+            "hermes_git_status",
+            "hermes_git_diff",
+            "hermes_cron_run",
+            "hermes_cron_pause",
+            "hermes_cron_copy",
+            "hermes_cron_move",
+            "hermes_skill_create",
+            "hermes_skill_edit",
+            "hermes_skill_patch",
+            "hermes_skill_write_file",
+            "hermes_skill_copy",
+            "hermes_skill_sync_to_default",
+            "hermes_skill_delete",
+            "hermes_config_set",
+            "hermes_config_patch",
+            "hermes_env_set_nonsecret",
+            "hermes_env_copy_nonsecret",
+            "hermes_gateway_restart",
+            "hermes_workspace_read",
+            "hermes_workspace_patch",
+            "hermes_workspace_write_file",
+            "hermes_workspace_run_test",
+            "hermes_owner_run_command",
+            "hermes_owner_patch",
+            "hermes_owner_write_file",
+        ]
+        result = {
+            "success": True,
+            "hermes_gpt_project_path": project_path,
+            "hermes_agent_root": agent_root,
+            "default_hermes_root": default_root,
+            "active_profile": active_profile,
+            "enabled": policy.enabled,
+            "level": policy.level,
+            "apply_mode": policy.apply_mode,
+            "owner_mode_ready": policy.owner_mode_ready,
+            "registered_operator_tools": registered,
+            "audit_log_path": str(op_policy.audit_log_path()),
+        }
+        return json.dumps(result, indent=2)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+def hermes_operator_audit_tail(limit: int = 20) -> str:
+    """Return the last ``limit`` audit records. Read-only."""
+    try:
+        records = op_policy.audit_tail(limit=limit)
+        return json.dumps(
+            {"success": True, "count": len(records), "records": records}, indent=2
+        )
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+# --- Cron wrappers (pass hermes_root through) ----------------------------
+
+
+def hermes_cron_list(profile: str = "default", include_disabled: bool = False) -> str:
+    return op_cron.hermes_cron_list(
+        profile=profile, include_disabled=include_disabled,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_cron_status(profile: str = "default") -> str:
+    return op_cron.hermes_cron_status(profile=profile, hermes_root=_default_hermes_root())
+
+
+def hermes_cron_run(profile: str = "default", job_id: str = "", dry_run: bool = True) -> str:
+    return op_cron.hermes_cron_run(
+        profile=profile, job_id=job_id, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_cron_pause(profile: str = "default", job_id: str = "", reason: str = "", dry_run: bool = True) -> str:
+    return op_cron.hermes_cron_pause(
+        profile=profile, job_id=job_id, reason=reason, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_cron_copy(source_profile: str, target_profile: str, job_id: str, dry_run: bool = True) -> str:
+    return op_cron.hermes_cron_copy(
+        source_profile=source_profile, target_profile=target_profile,
+        job_id=job_id, dry_run=dry_run, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_cron_move(
+    source_profile: str,
+    target_profile: str,
+    job_id: str,
+    pause_source: bool = True,
+    test_run_target: bool = False,
+    dry_run: bool = True,
+) -> str:
+    return op_cron.hermes_cron_move(
+        source_profile=source_profile, target_profile=target_profile,
+        job_id=job_id, pause_source=pause_source,
+        test_run_target=test_run_target, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+# --- Skill wrappers ------------------------------------------------------
+
+
+def hermes_skill_diff(
+    profile: str = "default",
+    name: str = "",
+    proposed_content: str | None = None,
+    old_string: str | None = None,
+    new_string: str | None = None,
+    file_path: str = "SKILL.md",
+) -> str:
+    return op_skills.hermes_skill_diff(
+        profile=profile, name=name, proposed_content=proposed_content,
+        old_string=old_string, new_string=new_string, file_path=file_path,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_create(profile: str = "default", name: str = "", content: str = "", dry_run: bool = True) -> str:
+    return op_skills.hermes_skill_create(
+        profile=profile, name=name, content=content, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_edit(profile: str = "default", name: str = "", content: str = "", dry_run: bool = True) -> str:
+    return op_skills.hermes_skill_edit(
+        profile=profile, name=name, content=content, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_patch(
+    profile: str = "default",
+    name: str = "",
+    old_string: str = "",
+    new_string: str = "",
+    file_path: str = "SKILL.md",
+    replace_all: bool = False,
+    dry_run: bool = True,
+) -> str:
+    return op_skills.hermes_skill_patch(
+        profile=profile, name=name, old_string=old_string, new_string=new_string,
+        file_path=file_path, replace_all=replace_all, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_write_file(
+    profile: str = "default",
+    name: str = "",
+    file_path: str = "",
+    file_content: str = "",
+    dry_run: bool = True,
+) -> str:
+    return op_skills.hermes_skill_write_file(
+        profile=profile, name=name, file_path=file_path,
+        file_content=file_content, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_copy(source_profile: str, target_profile: str, name: str, dry_run: bool = True) -> str:
+    return op_skills.hermes_skill_copy(
+        source_profile=source_profile, target_profile=target_profile,
+        name=name, dry_run=dry_run, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_sync_to_default(source_profile: str, name: str, dry_run: bool = True) -> str:
+    return op_skills.hermes_skill_sync_to_default(
+        source_profile=source_profile, name=name, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_skill_delete(profile: str = "default", name: str = "", dry_run: bool = True) -> str:
+    return op_skills.hermes_skill_delete(
+        profile=profile, name=name, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+# --- Config / env wrappers -----------------------------------------------
+
+
+def hermes_config_get(profile: str = "default", key_path: str | None = None) -> str:
+    return op_config.hermes_config_get(
+        profile=profile, key_path=key_path, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_config_set(profile: str = "default", key_path: str = "", value: Any = None, dry_run: bool = True) -> str:
+    return op_config.hermes_config_set(
+        profile=profile, key_path=key_path, value=value, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_config_patch(profile: str = "default", old_string: str = "", new_string: str = "", dry_run: bool = True) -> str:
+    return op_config.hermes_config_patch(
+        profile=profile, old_string=old_string, new_string=new_string,
+        dry_run=dry_run, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_env_status(profile: str = "default", keys: list[str] | None = None) -> str:
+    return op_config.hermes_env_status(
+        profile=profile, keys=keys, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_env_set_nonsecret(profile: str = "default", key: str = "", value: str = "", dry_run: bool = True) -> str:
+    return op_config.hermes_env_set_nonsecret(
+        profile=profile, key=key, value=value, dry_run=dry_run,
+        hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_env_copy_nonsecret(source_profile: str, target_profile: str, key: str, dry_run: bool = True) -> str:
+    return op_config.hermes_env_copy_nonsecret(
+        source_profile=source_profile, target_profile=target_profile,
+        key=key, dry_run=dry_run, hermes_root=_default_hermes_root(),
+    )
+
+
+# --- Gateway / workspace / git / owner wrappers --------------------------
+
+
+def hermes_gateway_status(profile: str = "default") -> str:
+    return op_workspace.hermes_gateway_status(
+        profile=profile, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_gateway_restart(profile: str = "default", dry_run: bool = True) -> str:
+    return op_workspace.hermes_gateway_restart(
+        profile=profile, dry_run=dry_run, hermes_root=_default_hermes_root(),
+    )
+
+
+def hermes_workspace_read(path: str, offset: int = 1, limit: int = 500) -> str:
+    return op_workspace.hermes_workspace_read(path=path, offset=offset, limit=limit)
+
+
+def hermes_workspace_patch(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+    dry_run: bool = True,
+) -> str:
+    return op_workspace.hermes_workspace_patch(
+        path=path, old_string=old_string, new_string=new_string,
+        replace_all=replace_all, dry_run=dry_run,
+    )
+
+
+def hermes_workspace_write_file(path: str, content: str, dry_run: bool = True) -> str:
+    return op_workspace.hermes_workspace_write_file(
+        path=path, content=content, dry_run=dry_run,
+    )
+
+
+def hermes_workspace_run_test(command: str, workdir: str | None = None, timeout: int = 120, dry_run: bool = True) -> str:
+    return op_workspace.hermes_workspace_run_test(
+        command=command, workdir=workdir, timeout=timeout, dry_run=dry_run,
+    )
+
+
+def hermes_git_status(workdir: str) -> str:
+    return op_workspace.hermes_git_status(workdir=workdir)
+
+
+def hermes_git_diff(workdir: str, pathspec: str | None = None, stat: bool = False) -> str:
+    return op_workspace.hermes_git_diff(workdir=workdir, pathspec=pathspec, stat=stat)
+
+
+def hermes_owner_run_command(command: str, timeout: int = 120, workdir: str | None = None, dry_run: bool = True) -> str:
+    return op_workspace.hermes_owner_run_command(
+        command=command, timeout=timeout, workdir=workdir, dry_run=dry_run,
+    )
+
+
+def hermes_owner_patch(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+    dry_run: bool = True,
+) -> str:
+    return op_workspace.hermes_owner_patch(
+        path=path, old_string=old_string, new_string=new_string,
+        replace_all=replace_all, dry_run=dry_run,
+    )
+
+
+def hermes_owner_write_file(path: str, content: str, dry_run: bool = True) -> str:
+    return op_workspace.hermes_owner_write_file(path=path, content=content, dry_run=dry_run)
 
 
 def build_server(
@@ -448,6 +887,56 @@ def register_tools(server: FastMCP) -> None:
         server.add_tool(hermes_run_command, meta=tool_meta())
     if env_enabled(ENABLE_SESSION_SEARCH_ENV):
         server.add_tool(hermes_session_search, meta=tool_meta())
+
+    # --- Operator / Owner Mode tools -----------------------------------
+    #
+    # Read-only tools are always registered. Mutating tools are registered
+    # unconditionally too (per spec: "register with refusal so the user can
+    # see why unavailable") — the wrappers above return a JSON error string
+    # when the operator policy is not enabled / level is insufficient /
+    # apply_mode is dry_run / owner ack is missing.
+    server.add_tool(hermes_operator_policy, meta=tool_meta())
+    server.add_tool(hermes_operator_status, meta=tool_meta())
+    server.add_tool(hermes_operator_audit_tail, meta=tool_meta())
+
+    # Cron
+    server.add_tool(hermes_cron_list, meta=tool_meta())
+    server.add_tool(hermes_cron_status, meta=tool_meta())
+    server.add_tool(hermes_cron_run, meta=tool_meta())
+    server.add_tool(hermes_cron_pause, meta=tool_meta())
+    server.add_tool(hermes_cron_copy, meta=tool_meta())
+    server.add_tool(hermes_cron_move, meta=tool_meta())
+
+    # Skills
+    server.add_tool(hermes_skill_diff, meta=tool_meta())
+    server.add_tool(hermes_skill_create, meta=tool_meta())
+    server.add_tool(hermes_skill_edit, meta=tool_meta())
+    server.add_tool(hermes_skill_patch, meta=tool_meta())
+    server.add_tool(hermes_skill_write_file, meta=tool_meta())
+    server.add_tool(hermes_skill_copy, meta=tool_meta())
+    server.add_tool(hermes_skill_sync_to_default, meta=tool_meta())
+    server.add_tool(hermes_skill_delete, meta=tool_meta())
+
+    # Config / env
+    server.add_tool(hermes_config_get, meta=tool_meta())
+    server.add_tool(hermes_config_set, meta=tool_meta())
+    server.add_tool(hermes_config_patch, meta=tool_meta())
+    server.add_tool(hermes_env_status, meta=tool_meta())
+    server.add_tool(hermes_env_set_nonsecret, meta=tool_meta())
+    server.add_tool(hermes_env_copy_nonsecret, meta=tool_meta())
+
+    # Gateway / workspace / git / owner
+    server.add_tool(hermes_gateway_status, meta=tool_meta())
+    server.add_tool(hermes_gateway_restart, meta=tool_meta())
+    server.add_tool(hermes_workspace_read, meta=tool_meta())
+    server.add_tool(hermes_workspace_patch, meta=tool_meta())
+    server.add_tool(hermes_workspace_write_file, meta=tool_meta())
+    server.add_tool(hermes_workspace_run_test, meta=tool_meta())
+    server.add_tool(hermes_git_status, meta=tool_meta())
+    server.add_tool(hermes_git_diff, meta=tool_meta())
+    server.add_tool(hermes_owner_run_command, meta=tool_meta())
+    server.add_tool(hermes_owner_patch, meta=tool_meta())
+    server.add_tool(hermes_owner_write_file, meta=tool_meta())
 
 
 mcp = build_server()
