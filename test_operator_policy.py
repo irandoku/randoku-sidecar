@@ -254,9 +254,17 @@ def test_resolve_profile_home_named(tmp_path):
     )
 
 
-# ---------------------------------------------------------------------------
-# Path safety
-# ---------------------------------------------------------------------------
+def test_normalize_hermes_data_root_variants(tmp_path):
+    root = Path(r"C:\Users\asimo\AppData\Local\hermes")
+    profile_root = root / "profiles" / "hermes-senior-engineer"
+    agent_root = root / "hermes-agent"
+
+    assert op.normalize_hermes_data_root(root) == root
+    assert op.normalize_hermes_data_root(profile_root) == root
+    assert op.normalize_hermes_data_root(agent_root) == root
+
+    assert op.resolve_profile_home("default", root) == root
+    assert op.resolve_profile_home("hermes-researcher", root) == root / "profiles" / "hermes-researcher"
 
 
 @pytest.mark.parametrize(

@@ -448,35 +448,22 @@ def hermes_session_search(query: str, limit: int = 20, offset: int = 0) -> str:
 
 
 def _hermes_root_for_operator() -> Path | None:
-    """Return the Hermes root to scope operator operations.
+    """Return the Hermes data root for operator operations.
 
-    Falls back to the default Hermes root path if Hermes imports failed
-    but the standard install location exists.
+    This intentionally normalizes profile-scoped HERMES_HOME values back to the
+    shared Hermes data root so operator/profile tools never treat a profile
+    directory or the hermes-agent source checkout as the global root.
     """
-    if HERMES_ROOT:
-        return HERMES_ROOT
-    env_home = os.environ.get("HERMES_HOME")
-    if env_home:
-        return Path(env_home).expanduser()
-    candidates = [
-        Path.home() / "AppData" / "Local" / "hermes" / "hermes-agent",
-        Path.home() / ".hermes" / "hermes-agent",
-        Path.home() / ".hermes",
-    ]
-    for cand in candidates:
-        try:
-            if cand.is_dir():
-                return cand
-        except OSError:
-            continue
-    return None
+    return _default_hermes_root()
 
 
 def _default_hermes_root() -> Path | None:
     """Return the default Hermes root path (the data root, not the agent source)."""
     env_home = os.environ.get("HERMES_HOME")
     if env_home:
-        return Path(env_home).expanduser()
+        normalized = op_policy.normalize_hermes_data_root(Path(env_home).expanduser())
+        if normalized is not None:
+            return normalized
     # The Hermes data root is ~/.hermes (Windows: ~/AppData/Local/hermes).
     # The agent source root lives next to it under hermes-agent/ and is not
     # the same path.

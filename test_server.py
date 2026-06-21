@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -164,6 +165,14 @@ def test_remote_profile_requires_explicit_unsafe_ack(monkeypatch):
 
     with pytest.raises(SystemExit, match="Remote profile requires real authentication"):
         server.main()
+
+
+def test_default_hermes_root_normalizes_profile_scoped_env(monkeypatch):
+    monkeypatch.setenv(
+        "HERMES_HOME", r"C:\Users\asimo\AppData\Local\hermes\profiles\hermes-senior-engineer"
+    )
+    assert server._default_hermes_root() == Path(r"C:\Users\asimo\AppData\Local\hermes")
+    assert server._hermes_root_for_operator() == Path(r"C:\Users\asimo\AppData\Local\hermes")
 
 
 def free_port() -> int:

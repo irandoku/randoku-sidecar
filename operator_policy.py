@@ -178,6 +178,29 @@ def _normalize_path(path: str | os.PathLike[str]) -> Path:
             return Path(str(path))
 
 
+def normalize_hermes_data_root(path: str | os.PathLike[str] | None) -> Path | None:
+    """Normalize a Hermes install path to the data root.
+
+    ``.../profiles/<profile>`` -> ``...``
+    ``.../hermes-agent`` -> ``...``
+    Already-normalized data roots remain unchanged.
+    """
+    if path is None:
+        return None
+    raw = Path(os.path.expanduser(str(path)))
+    try:
+        parts = [part.lower() for part in raw.parts]
+    except Exception:
+        return raw
+    if not parts:
+        return raw
+    if parts[-1] == "hermes-agent":
+        return raw.parent
+    if len(parts) >= 2 and parts[-2] == "profiles":
+        return raw.parent.parent
+    return raw
+
+
 def is_denied_path(path: str | os.PathLike[str]) -> bool:
     """Return True if ``path`` is a secret / credential / vault / token path.
 
@@ -353,6 +376,7 @@ def resolve_profile_home(profile: str, hermes_root: Path | None) -> Path:
     canon = validate_profile_name(profile)
     if hermes_root is None:
         raise RuntimeError("Hermes root is not available; cannot resolve profile home")
+    hermes_root = normalize_hermes_data_root(hermes_root) or hermes_root
     if canon == "default":
         return hermes_root
     return hermes_root / "profiles" / canon
@@ -362,6 +386,7 @@ def profile_exists(profile: str, hermes_root: Path | None) -> bool:
     """Return True if ``profile`` exists on disk under ``hermes_root``."""
     if hermes_root is None:
         return profile == "default"
+    hermes_root = normalize_hermes_data_root(hermes_root) or hermes_root
     try:
         home = resolve_profile_home(profile, hermes_root)
     except (ValueError, RuntimeError):
