@@ -53,6 +53,32 @@ def _atomic_write_text(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+def _is_git_worktree(path: Path) -> bool:
+    """Return True when path is inside a git worktree.
+
+    This intentionally uses filesystem markers only. It avoids invoking git so
+    the backup policy stays cheap, deterministic, and shell-free.
+    """
+    start = path if path.is_dir() else path.parent
+    for candidate in (start, *start.parents):
+        dotgit = candidate / ".git"
+        if dotgit.exists():
+            return True
+    return False
+
+
+def _should_backup_file(path: Path) -> tuple[bool, str]:
+    """Decide whether a file-level .bak backup should be created.
+
+    Git worktrees already provide rollback through git diff/restore/reflog, and
+    extra .bak files pollute repository status. Non-git workspaces keep the old
+    conservative backup behavior.
+    """
+    if _is_git_worktree(path):
+        return (False, "git_worktree")
+    return (True, "non_git_workspace")
+
+
 def _backup_file(path: Path) -> Path | None:
     if not path.exists():
         return None
@@ -63,6 +89,13 @@ def _backup_file(path: Path) -> Path | None:
         return bak
     except OSError:
         return None
+
+
+def _maybe_backup_file(path: Path) -> tuple[Path | None, str]:
+    should_backup, reason = _should_backup_file(path)
+    if not should_backup:
+        return (None, reason)
+    return (_backup_file(path), reason)
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +365,7 @@ def hermes_workspace_patch(
             return json.dumps({"success": True, "dry_run": True, "plan": plan}, indent=2)
 
         policy.require_mutation(dry_run)
-        backup = _backup_file(p)
+        backup, backup_policy = _maybe_backup_file(p)
         _atomic_write_text(p, new_content)
         result = {
             "success": True,
@@ -340,6 +373,7 @@ def hermes_workspace_patch(
             "path": str(p),
             "match_count": match_count,
             "backup": str(backup) if backup else None,
+            "backup_policy": backup_policy,
         }
         op.audit_record(
             tool="hermes_workspace_patch",
@@ -398,13 +432,14 @@ def hermes_workspace_write_file(
             return json.dumps({"success": True, "dry_run": True, "plan": plan}, indent=2)
 
         policy.require_mutation(dry_run)
-        backup = _backup_file(p) if p.exists() else None
+        backup, backup_policy = _maybe_backup_file(p) if p.exists() else (None, "new_file")
         _atomic_write_text(p, content)
         result = {
             "success": True,
             "dry_run": False,
             "path": str(p),
             "backup": str(backup) if backup else None,
+            "backup_policy": backup_policy,
         }
         op.audit_record(
             tool="hermes_workspace_write_file",
@@ -836,7 +871,7 @@ def hermes_owner_patch(
             return json.dumps({"success": True, "dry_run": True, "plan": plan}, indent=2)
 
         policy.require_mutation(dry_run)
-        backup = _backup_file(p)
+        backup, backup_policy = _maybe_backup_file(p)
         _atomic_write_text(p, new_content)
         result = {
             "success": True,
@@ -845,6 +880,7 @@ def hermes_owner_patch(
             "path": str(p),
             "match_count": match_count,
             "backup": str(backup) if backup else None,
+            "backup_policy": backup_policy,
         }
         op.audit_record(
             tool="hermes_owner_patch",
@@ -909,7 +945,7 @@ def hermes_owner_write_file(
             return json.dumps({"success": True, "dry_run": True, "plan": plan}, indent=2)
 
         policy.require_mutation(dry_run)
-        backup = _backup_file(p) if p.exists() else None
+        backup, backup_policy = _maybe_backup_file(p) if p.exists() else (None, "new_file")
         _atomic_write_text(p, content)
         result = {
             "success": True,
@@ -917,6 +953,7 @@ def hermes_owner_write_file(
             "owner_mode": True,
             "path": str(p),
             "backup": str(backup) if backup else None,
+            "backup_policy": backup_policy,
         }
         op.audit_record(
             tool="hermes_owner_write_file",

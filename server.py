@@ -410,12 +410,74 @@ def hermes_skill_view(name: str) -> str:
         raise clean_error("hermes_skill_view", exc) from exc
 
 
+def _enable_readonly_session_search(db: Any) -> None:
+    """Enable native SessionDB.search_messages() for read-only DB handles.
+
+    Compatibility shim: Hermes SessionDB(read_only=True) opens the database
+    without schema initialization, which can leave _fts_enabled False even when
+    the existing FTS tables are present. Probe the existing schema so the native
+    search_messages() path can run without opening the DB in write mode.
+    """
+    try:
+        conn = getattr(db, "_conn", None)
+        if conn is None:
+            return
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        ).fetchall()
+        names = {row["name"] for row in rows}
+        db._fts_enabled = {"messages", "sessions", "messages_fts"}.issubset(names)
+    except Exception:
+        db._fts_enabled = False
+
+
+def _session_db_readonly() -> Any:
+    if SessionDB is None:
+        raise RuntimeError("SessionDB import failed.")
+    db = SessionDB(read_only=True)
+    _enable_readonly_session_search(db)
+    return db
+
+
+def _decode_session_content(db: Any, content: Any) -> str:
+    try:
+        decoder = getattr(db, "_decode_content", None)
+        decoded = decoder(content) if callable(decoder) else content
+    except Exception:
+        decoded = content
+    if isinstance(decoded, list):
+        parts = [
+            item.get("text", "") for item in decoded
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        return " ".join(part for part in parts if part).strip() or "[multimodal content]"
+    if decoded is None:
+        return ""
+    return str(decoded)
+
+
+def _render_session_rows(db: Any, rows: list[Any], max_message_chars: int = 2000, max_total_chars: int = 50000) -> str:
+    rendered: list[str] = []
+    total = 0
+    for row in rows:
+        role = row["role"] if "role" in row.keys() else ""
+        raw_content = row["content"] if "content" in row.keys() else ""
+        content = _decode_session_content(db, raw_content).replace("\r", " ").strip()
+        if len(content) > max_message_chars:
+            content = content[:max_message_chars] + "… [truncated]"
+        block = f"[{role}]\n{content}"
+        if total + len(block) > max_total_chars:
+            rendered.append("[system]\n… [recall truncated: max_total_chars reached]")
+            break
+        rendered.append(block)
+        total += len(block)
+    return "\n\n---\n\n".join(rendered)
+
+
 def hermes_session_search(query: str, limit: int = 20, offset: int = 0) -> str:
     try:
         require_imports()
-        if SessionDB is None:
-            return "Hermes session search is unavailable in this install: SessionDB import failed."
-        db = SessionDB(read_only=True)
+        db = _session_db_readonly()
         if not hasattr(db, "search_messages"):
             return "Hermes session search is unavailable in this install: search_messages API is missing."
         rows = db.search_messages(query=query, limit=limit, offset=offset)
@@ -430,6 +492,79 @@ def hermes_session_search(query: str, limit: int = 20, offset: int = 0) -> str:
         return "\n".join(rendered)
     except Exception as exc:
         message = f"Hermes session search is unavailable in this install: {exc}"
+        eprint(f"hermes-gpt: {message}")
+        return message
+
+
+def hermes_session_read(session_id: str, limit: int = 80, offset: int = 0) -> str:
+    try:
+        require_imports()
+        session_id = (session_id or "").strip()
+        if not session_id:
+            return "session_id is required."
+        limit = max(1, min(int(limit), 120))
+        offset = max(0, int(offset))
+        db = _session_db_readonly()
+        conn = getattr(db, "_conn", None)
+        if conn is None:
+            return "Hermes session read is unavailable: database connection is missing."
+        rows = conn.execute(
+            "SELECT id, role, content, timestamp, tool_name FROM messages WHERE session_id = ? AND active = 1 ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?",
+            (session_id, limit, offset),
+        ).fetchall()
+        if not rows:
+            return f"No active messages found for session {session_id!r}."
+        body = _render_session_rows(db, rows)
+        return f"Session: {session_id}\nMessages: {len(rows)}\n\n{body}"
+    except Exception as exc:
+        message = f"Hermes session read is unavailable in this install: {exc}"
+        eprint(f"hermes-gpt: {message}")
+        return message
+
+
+def hermes_session_recall(query: str, top_k: int = 3, context_window: int = 20) -> str:
+    try:
+        require_imports()
+        query = (query or "").strip()
+        if not query:
+            return "query is required."
+        top_k = max(1, min(int(top_k), 5))
+        context_window = max(1, min(int(context_window), 50))
+        db = _session_db_readonly()
+        if not hasattr(db, "search_messages"):
+            return "Hermes session recall is unavailable in this install: search_messages API is missing."
+        matches = db.search_messages(query=query, limit=top_k, offset=0)
+        if not matches:
+            return "No matching Hermes session messages found."
+        conn = getattr(db, "_conn", None)
+        if conn is None:
+            return "Hermes session recall is unavailable: database connection is missing."
+        blocks: list[str] = []
+        for match in matches:
+            session_id = match.get("session_id", "")
+            match_id = match.get("id")
+            if not session_id or match_id is None:
+                continue
+            rows = conn.execute(
+                "SELECT id, role, content, timestamp, tool_name FROM messages WHERE session_id = ? AND active = 1 ORDER BY timestamp ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+            if not rows:
+                continue
+            pos = 0
+            for idx, row in enumerate(rows):
+                if row["id"] == match_id:
+                    pos = idx
+                    break
+            start = max(0, pos - context_window)
+            end = min(len(rows), pos + context_window + 1)
+            window_rows = rows[start:end]
+            body = _render_session_rows(db, window_rows, max_message_chars=1600, max_total_chars=30000)
+            snippet = (match.get("snippet") or "").replace("\n", " ")
+            blocks.append(f"### Session {session_id}\nMatched message id: {match_id}\nSnippet: {snippet}\n\n{body}")
+        return "\n\n====================\n\n".join(blocks) if blocks else "No recall context could be expanded."
+    except Exception as exc:
+        message = f"Hermes session recall is unavailable in this install: {exc}"
         eprint(f"hermes-gpt: {message}")
         return message
 
@@ -874,6 +1009,8 @@ def register_tools(server: FastMCP) -> None:
         server.add_tool(hermes_run_command, meta=tool_meta())
     if env_enabled(ENABLE_SESSION_SEARCH_ENV):
         server.add_tool(hermes_session_search, meta=tool_meta())
+        server.add_tool(hermes_session_read, meta=tool_meta())
+        server.add_tool(hermes_session_recall, meta=tool_meta())
 
     # --- Operator / Owner Mode tools -----------------------------------
     #
