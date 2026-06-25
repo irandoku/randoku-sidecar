@@ -937,6 +937,12 @@ def hermes_workspace_write_file(path: str, content: str, dry_run: bool = True) -
     )
 
 
+def hermes_workspace_apply_diff(path: str, diff: str, dry_run: bool = True) -> str:
+    return op_workspace.hermes_workspace_apply_diff(
+        path=path, diff=diff, dry_run=dry_run,
+    )
+
+
 def hermes_workspace_run_test(command: str, workdir: str | None = None, timeout: int = 120, dry_run: bool = True) -> str:
     return op_workspace.hermes_workspace_run_test(
         command=command, workdir=workdir, timeout=timeout, dry_run=dry_run,
@@ -1055,6 +1061,7 @@ def register_tools(server: FastMCP) -> None:
     server.add_tool(hermes_workspace_read, meta=tool_meta())
     server.add_tool(hermes_workspace_patch, meta=tool_meta())
     server.add_tool(hermes_workspace_write_file, meta=tool_meta())
+    server.add_tool(hermes_workspace_apply_diff, meta=tool_meta())
     server.add_tool(hermes_workspace_run_test, meta=tool_meta())
     server.add_tool(hermes_git_status, meta=tool_meta())
     server.add_tool(hermes_git_diff, meta=tool_meta())

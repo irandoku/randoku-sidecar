@@ -311,6 +311,215 @@ def hermes_workspace_read(
         return json.dumps({"success": False, "error": str(exc)}, indent=2)
 
 
+def _parse_hunk_header(header: str) -> tuple[int, int, int, int]:
+    """Parse a unified diff hunk header.
+
+    Returns (old_start, old_count, new_start, new_count), using 1-based line
+    numbers from the diff format.
+    """
+    match = re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", header)
+    if not match:
+        raise ValueError(f"Invalid unified diff hunk header: {header!r}")
+    old_start = int(match.group(1))
+    old_count = int(match.group(2) or "1")
+    new_start = int(match.group(3))
+    new_count = int(match.group(4) or "1")
+    return (old_start, old_count, new_start, new_count)
+
+
+def _extract_unified_diff_hunks(diff_text: str) -> list[list[str]]:
+    """Extract strict unified diff hunks for a single-file patch.
+
+    File headers are ignored. Multi-file diffs and unsupported metadata are
+    rejected by refusing a second ---/+++ file header pair after hunks begin.
+    """
+    if not diff_text or not diff_text.strip():
+        raise ValueError("diff is required.")
+    lines = diff_text.splitlines(keepends=True)
+    hunks: list[list[str]] = []
+    current: list[str] | None = None
+    seen_hunk = False
+    file_header_pairs = 0
+    git_diff_headers = 0
+    saw_minus_header = False
+
+    for line in lines:
+        if line.startswith("diff --git "):
+            if seen_hunk:
+                raise ValueError("multi-file diffs are not supported.")
+            git_diff_headers += 1
+            if git_diff_headers > 1:
+                raise ValueError("multi-file diffs are not supported.")
+            continue
+        if line.startswith("index "):
+            if seen_hunk:
+                raise ValueError("unsupported git diff metadata after hunks.")
+            continue
+        if line.startswith(("new file mode ", "deleted file mode ", "rename from ", "rename to ", "Binary files ")):
+            raise ValueError("file creation, deletion, rename, and binary diffs are not supported.")
+        if line.startswith("--- "):
+            if seen_hunk:
+                raise ValueError("multi-file diffs are not supported.")
+            saw_minus_header = True
+            continue
+        if line.startswith("+++ "):
+            if seen_hunk:
+                raise ValueError("multi-file diffs are not supported.")
+            if saw_minus_header:
+                file_header_pairs += 1
+                saw_minus_header = False
+                if file_header_pairs > 1:
+                    raise ValueError("multi-file diffs are not supported.")
+            continue
+        if line.startswith("@@ "):
+            seen_hunk = True
+            if current is not None:
+                hunks.append(current)
+            current = [line]
+            continue
+        if current is not None:
+            if line.startswith((" ", "+", "-", "\\")):
+                current.append(line)
+                continue
+            raise ValueError(f"Unsupported unified diff line: {line!r}")
+        if line.strip():
+            # Permit only empty preamble before the first hunk.
+            raise ValueError(f"Unsupported unified diff preamble line: {line!r}")
+
+    if current is not None:
+        hunks.append(current)
+    if not hunks:
+        raise ValueError("diff does not contain any unified diff hunks.")
+    return hunks
+
+
+def _apply_unified_diff_to_text(content: str, diff_text: str) -> tuple[str, int]:
+    """Apply a strict single-file unified diff to text.
+
+    Context and removal lines must match exactly. No fuzzy matching is allowed.
+    """
+    source = content.splitlines(keepends=True)
+    output: list[str] = []
+    cursor = 0
+    hunks = _extract_unified_diff_hunks(diff_text)
+
+    for hunk in hunks:
+        old_start, _old_count, _new_start, _new_count = _parse_hunk_header(hunk[0].rstrip("\n"))
+        hunk_index = max(0, old_start - 1)
+        if hunk_index < cursor:
+            raise ValueError("overlapping or out-of-order hunks are not supported.")
+        output.extend(source[cursor:hunk_index])
+        cursor = hunk_index
+
+        for line in hunk[1:]:
+            if line.startswith("\\"):
+                # "\\ No newline at end of file" marker. Keep behavior strict and
+                # ignore the marker; the adjacent line content carries the state.
+                continue
+            marker = line[:1]
+            text = line[1:]
+            if marker == " ":
+                if cursor >= len(source) or source[cursor] != text:
+                    raise ValueError(f"context mismatch near hunk starting at line {old_start}.")
+                output.append(source[cursor])
+                cursor += 1
+            elif marker == "-":
+                if cursor >= len(source) or source[cursor] != text:
+                    raise ValueError(f"removal mismatch near hunk starting at line {old_start}.")
+                cursor += 1
+            elif marker == "+":
+                output.append(text)
+            else:
+                raise ValueError(f"Unsupported unified diff marker: {marker!r}")
+
+    output.extend(source[cursor:])
+    return ("".join(output), len(hunks))
+
+
+def hermes_workspace_apply_diff(
+    path: str,
+    diff: str,
+    dry_run: bool = True,
+) -> str:
+    try:
+        policy = op.OperatorPolicy()
+        policy.require_level("workspace")
+        policy.require_workspace_path(path)
+        if not diff or not diff.strip():
+            raise ValueError("diff is required.")
+
+        p = op._normalize_path(path)
+        if not p.exists() or not p.is_file():
+            raise FileNotFoundError(f"File not found: {path}")
+        content = p.read_text(encoding="utf-8", errors="replace")
+        new_content, hunk_count = _apply_unified_diff_to_text(content, diff)
+        preview_diff = op.unified_diff(content, new_content, label=p.name)
+        backup_would_create, backup_policy = _should_backup_file(p)
+        rollback_hint = f"git restore {p}" if backup_policy == "git_worktree" else "restore from backup"
+
+        if policy.effective_dry_run(dry_run):
+            plan = {
+                "would_apply": True,
+                "path": str(p),
+                "hunk_count": hunk_count,
+                "diff": preview_diff,
+                "backup_policy": backup_policy,
+                "backup_would_create": backup_would_create,
+                "rollback_hint": rollback_hint,
+            }
+            op.audit_record(
+                tool="hermes_workspace_apply_diff",
+                level=policy.level,
+                apply_mode=policy.apply_mode,
+                dry_run=True,
+                success=True,
+                changed=False,
+                summary=f"dry-run apply_diff hunks={hunk_count}",
+                path=str(p),
+                content=diff,
+                extra={"hunk_count": hunk_count, "backup_policy": backup_policy},
+            )
+            return json.dumps({"success": True, "dry_run": True, "plan": plan}, indent=2)
+
+        policy.require_mutation(dry_run)
+        backup, backup_policy = _maybe_backup_file(p)
+        _atomic_write_text(p, new_content)
+        result = {
+            "success": True,
+            "dry_run": False,
+            "path": str(p),
+            "hunk_count": hunk_count,
+            "backup": str(backup) if backup else None,
+            "backup_policy": backup_policy,
+            "rollback_hint": rollback_hint,
+        }
+        op.audit_record(
+            tool="hermes_workspace_apply_diff",
+            level=policy.level,
+            apply_mode=policy.apply_mode,
+            dry_run=False,
+            success=True,
+            changed=True,
+            summary=f"applied diff to {p.name} ({hunk_count} hunk(s))",
+            path=str(p),
+            content=diff,
+            extra={"hunk_count": hunk_count, "backup_policy": backup_policy},
+        )
+        return json.dumps(result, indent=2)
+    except Exception as exc:
+        op.audit_record(
+            tool="hermes_workspace_apply_diff",
+            level="unknown",
+            apply_mode="unknown",
+            dry_run=dry_run,
+            success=False,
+            error=str(exc),
+            path=path,
+            content=diff,
+        )
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
 def hermes_workspace_patch(
     path: str,
     old_string: str,
