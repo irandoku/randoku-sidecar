@@ -217,6 +217,24 @@ def test_default_hermes_root_normalizes_profile_scoped_env(monkeypatch):
     assert server._hermes_root_for_operator() == Path(r"C:\Users\example\AppData\Local\hermes")
 
 
+def test_external_context_recall_wrapper_defaults_to_cli(monkeypatch):
+    captured = {}
+
+    def fake_recall(**kwargs):
+        captured.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(server.op_memory, "hermes_external_context_recall", fake_recall)
+
+    assert server.hermes_external_context_recall("memory bug") == "{}"
+    assert captured == {
+        "query": "memory bug",
+        "session_id": "",
+        "profile": "default",
+        "platform": "cli",
+    }
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))

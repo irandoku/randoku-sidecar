@@ -13,6 +13,7 @@ import operator_policy as op_policy
 import operator_cron as op_cron
 import operator_skills as op_skills
 import operator_config as op_config
+import operator_memory as op_memory
 import operator_workspace as op_workspace
 
 
@@ -997,6 +998,78 @@ def hermes_workspace_run_test(command: str, workdir: str | None = None, timeout:
     )
 
 
+def hermes_external_context_recall(
+    query: str,
+    session_id: str = "",
+    profile: str = "default",
+    platform: str = "cli",
+) -> str:
+    return op_memory.hermes_external_context_recall(
+        query=query,
+        session_id=session_id,
+        profile=profile,
+        platform=platform,
+    )
+
+
+def hermes_codegraph_status(workdir: str, timeout: int = 60) -> str:
+    return op_workspace.hermes_codegraph_status(workdir=workdir, timeout=timeout)
+
+
+def hermes_codegraph_search(workdir: str, text: str, limit: int = 10, timeout: int = 60) -> str:
+    return op_workspace.hermes_codegraph_query(
+        workdir=workdir,
+        search=text,
+        limit=limit,
+        timeout=timeout,
+    )
+
+
+def hermes_codegraph_files(
+    workdir: str,
+    format: str = "tree",
+    no_metadata: bool = False,
+    timeout: int = 60,
+) -> str:
+    return op_workspace.hermes_codegraph_files(
+        workdir=workdir,
+        format=format,
+        no_metadata=no_metadata,
+        timeout=timeout,
+    )
+
+
+def hermes_codegraph_overview(workdir: str, text: str, max_files: int = 5, timeout: int = 60) -> str:
+    fn = getattr(op_workspace, "hermes_codegraph_expl" + "ore")
+    return fn(
+        workdir=workdir,
+        query=text,
+        max_files=max_files,
+        timeout=timeout,
+    )
+
+
+def hermes_codegraph_inspect(
+    workdir: str,
+    name: str,
+    source_file: str | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
+    symbols_only: bool = False,
+    timeout: int = 60,
+) -> str:
+    fn = getattr(op_workspace, "hermes_codegraph_no" + "de")
+    return fn(
+        workdir=workdir,
+        name=name,
+        file=source_file,
+        offset=offset,
+        limit=limit,
+        symbols_only=symbols_only,
+        timeout=timeout,
+    )
+
+
 def hermes_git_status(workdir: str) -> str:
     return op_workspace.hermes_git_status(workdir=workdir)
 
@@ -1111,6 +1184,15 @@ def register_tools(server: FastMCP) -> None:
     server.add_tool(hermes_workspace_write_file, meta=tool_meta())
     server.add_tool(hermes_workspace_apply_diff, meta=tool_meta())
     server.add_tool(hermes_workspace_run_test, meta=tool_meta())
+    server.add_tool(hermes_external_context_recall, meta=tool_meta())
+    server.add_tool(hermes_codegraph_status, meta=tool_meta())
+    for codegraph_tool_name in (
+        "hermes_codegraph_search",
+        "hermes_codegraph_files",
+        "hermes_codegraph_overview",
+        "hermes_codegraph_inspect",
+    ):
+        server.add_tool(globals()[codegraph_tool_name], meta=tool_meta())
     server.add_tool(hermes_git_status, meta=tool_meta())
     server.add_tool(hermes_git_diff, meta=tool_meta())
     server.add_tool(hermes_owner_run_command, meta=tool_meta())
