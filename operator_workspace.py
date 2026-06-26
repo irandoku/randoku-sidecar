@@ -7,6 +7,11 @@ Tools:
 - ``hermes_workspace_patch``       : workspace  — find-and-replace within an allowed path
 - ``hermes_workspace_write_file``  : workspace  — write file within an allowed path
 - ``hermes_workspace_run_test``    : workspace  — conservative allowlist of test/lint commands
+- ``hermes_codegraph_status``      : read_only  — CodeGraph index status for an allowed repo
+- ``hermes_codegraph_files``       : read_only  — CodeGraph indexed file structure
+- ``hermes_codegraph_query``       : read_only  — CodeGraph symbol search
+- ``hermes_codegraph_explore``     : read_only  — CodeGraph source + call-path exploration
+- ``hermes_codegraph_node``        : read_only  — CodeGraph symbol/file inspection
 - ``hermes_git_status``            : read_only  — git status in a workdir
 - ``hermes_git_diff``              : read_only  — git diff in a workdir
 - ``hermes_owner_run_command``     : owner      — arbitrary command (with catastrophic blocks)
@@ -901,6 +906,202 @@ def hermes_workspace_run_test(
             },
         )
         return json.dumps({"success": False, "dry_run": dry_run, "status": "blocked", "error": str(exc)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# CodeGraph
+# ---------------------------------------------------------------------------
+
+_CODEGRAPH_READ_COMMANDS = {"status", "files", "query", "explore", "node"}
+_CODEGRAPH_MAX_OUTPUT_CHARS = 50000
+
+
+def _truncate_tool_output(text: str, limit: int = _CODEGRAPH_MAX_OUTPUT_CHARS) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return (text, False)
+    return (text[:limit] + "\n... <truncated>", True)
+
+
+def _require_codegraph_workdir(workdir: str) -> Path:
+    if not workdir:
+        raise ValueError("workdir is required.")
+    if op.is_denied_path(workdir):
+        raise PermissionError(
+            f"workdir {workdir!r} is denied by the operator path safety policy."
+        )
+    policy = op.OperatorPolicy()
+    if not policy.allowed_paths:
+        raise PermissionError(
+            "CodeGraph tools are disabled because "
+            f"{op.OPERATOR_ALLOWED_PATHS_ENV} is empty. Set it to one or more "
+            "workspace root directories."
+        )
+    if not op.path_under_allowed(workdir, policy.allowed_paths):
+        raise PermissionError(f"workdir {workdir!r} is not under any allowed path.")
+    normalized = op._normalize_path(workdir)
+    if not normalized.exists() or not normalized.is_dir():
+        raise FileNotFoundError(f"workdir not found or not a directory: {workdir}")
+    return normalized
+
+
+def _codegraph_executable() -> str:
+    exe = shutil.which("codegraph")
+    if not exe:
+        raise FileNotFoundError("codegraph executable not found in PATH.")
+    return exe
+
+
+def _run_codegraph(argv: list[str], workdir: Path, timeout: int = 60, runner=None) -> str:
+    command = argv[1] if len(argv) > 1 else ""
+    if command not in _CODEGRAPH_READ_COMMANDS:
+        raise PermissionError(f"CodeGraph command {command!r} is not allowed.")
+    effective_timeout = max(1, min(int(timeout), 120))
+    run_fn = runner or op.run_argv
+    rc, out, err = run_fn(argv, timeout=effective_timeout, workdir=str(workdir))
+    stdout, stdout_truncated = _truncate_tool_output(op.redact_output(out))
+    stderr, stderr_truncated = _truncate_tool_output(op.redact_output(err))
+    return json.dumps(
+        {
+            "success": rc == 0,
+            "command": command,
+            "argv": argv,
+            "workdir": str(workdir),
+            "timeout": effective_timeout,
+            "exit_code": rc,
+            "returncode": rc,
+            "stdout": stdout,
+            "stderr": stderr,
+            "truncated": stdout_truncated or stderr_truncated,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+        },
+        indent=2,
+    )
+
+
+def hermes_codegraph_status(workdir: str, timeout: int = 60, runner=None) -> str:
+    try:
+        normalized = _require_codegraph_workdir(workdir)
+        argv = [_codegraph_executable(), "status", str(normalized)]
+        return _run_codegraph(argv, normalized, timeout=timeout, runner=runner)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+def hermes_codegraph_files(
+    workdir: str,
+    filter: str | None = None,
+    pattern: str | None = None,
+    format: str = "tree",
+    max_depth: int | None = None,
+    no_metadata: bool = False,
+    json_output: bool = False,
+    timeout: int = 60,
+    runner=None,
+) -> str:
+    try:
+        normalized = _require_codegraph_workdir(workdir)
+        if format not in {"tree", "flat", "grouped"}:
+            raise ValueError("format must be one of: tree, flat, grouped.")
+        argv = [_codegraph_executable(), "files", "-p", str(normalized), "--format", format]
+        if filter:
+            argv.extend(["--filter", filter])
+        if pattern:
+            argv.extend(["--pattern", pattern])
+        if max_depth is not None:
+            argv.extend(["--max-depth", str(max(1, min(int(max_depth), 20)))])
+        if no_metadata:
+            argv.append("--no-metadata")
+        if json_output:
+            argv.append("--json")
+        return _run_codegraph(argv, normalized, timeout=timeout, runner=runner)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+def hermes_codegraph_query(
+    workdir: str,
+    search: str,
+    limit: int = 10,
+    kind: str | None = None,
+    json_output: bool = False,
+    timeout: int = 60,
+    runner=None,
+) -> str:
+    try:
+        normalized = _require_codegraph_workdir(workdir)
+        if not search or not search.strip():
+            raise ValueError("search is required.")
+        argv = [
+            _codegraph_executable(),
+            "query",
+            "-p",
+            str(normalized),
+            "-l",
+            str(max(1, min(int(limit), 100))),
+        ]
+        if kind:
+            argv.extend(["-k", kind])
+        if json_output:
+            argv.append("--json")
+        argv.append(search)
+        return _run_codegraph(argv, normalized, timeout=timeout, runner=runner)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+def hermes_codegraph_explore(
+    workdir: str,
+    query: str,
+    max_files: int = 5,
+    timeout: int = 60,
+    runner=None,
+) -> str:
+    try:
+        normalized = _require_codegraph_workdir(workdir)
+        if not query or not query.strip():
+            raise ValueError("query is required.")
+        argv = [
+            _codegraph_executable(),
+            "explore",
+            "-p",
+            str(normalized),
+            "--max-files",
+            str(max(1, min(int(max_files), 20))),
+            query,
+        ]
+        return _run_codegraph(argv, normalized, timeout=timeout, runner=runner)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+def hermes_codegraph_node(
+    workdir: str,
+    name: str,
+    file: str | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
+    symbols_only: bool = False,
+    timeout: int = 60,
+    runner=None,
+) -> str:
+    try:
+        normalized = _require_codegraph_workdir(workdir)
+        if not name or not name.strip():
+            raise ValueError("name is required.")
+        argv = [_codegraph_executable(), "node", "-p", str(normalized)]
+        if file:
+            argv.extend(["-f", file])
+        if offset is not None:
+            argv.extend(["--offset", str(max(1, int(offset)))])
+        if limit is not None:
+            argv.extend(["--limit", str(max(1, min(int(limit), 1000)))])
+        if symbols_only:
+            argv.append("--symbols-only")
+        argv.append(name)
+        return _run_codegraph(argv, normalized, timeout=timeout, runner=runner)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
 
 
 # ---------------------------------------------------------------------------
