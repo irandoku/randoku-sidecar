@@ -255,11 +255,20 @@ def test_resolve_profile_home_named(tmp_path):
 
 
 def test_normalize_hermes_data_root_variants(tmp_path):
-    root = Path(r"C:\Users\asimo\AppData\Local\hermes")
-    profile_root = root / "profiles" / "hermes-senior-engineer"
+    root = Path(r"C:\Users\example\AppData\Local\hermes")
+    profile_root = root / "profiles" / "example-profile"
     agent_root = root / "hermes-agent"
 
     assert op.normalize_hermes_data_root(root) == root
+    assert op.normalize_hermes_data_root(profile_root) == root
+    assert op.normalize_hermes_data_root(agent_root) == root
+
+
+def test_normalize_hermes_data_root_windows_style_raw_strings():
+    root = Path(r"C:\Users\example\AppData\Local\hermes")
+    profile_root = r"C:\Users\example\AppData\Local\hermes\profiles\example-profile"
+    agent_root = r"C:\Users\example\AppData\Local\hermes\hermes-agent"
+
     assert op.normalize_hermes_data_root(profile_root) == root
     assert op.normalize_hermes_data_root(agent_root) == root
 

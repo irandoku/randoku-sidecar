@@ -188,6 +188,10 @@ def test_run_test_accepts_pytest(workspace_tree, clean_env, audit_override, monk
     )
     parsed = json.loads(out)
     assert parsed["success"] is True
+    assert parsed["status"] == "pass"
+    assert parsed["exit_code"] == 0
+    assert parsed["workdir"] == str(workspace_tree)
+    assert parsed["timeout"] == 120
     assert captured["argv"] == ["pytest"]
 
 
@@ -224,8 +228,9 @@ def test_run_test_rejects_dangerous_or_unallowed_commands(
     )
     parsed = json.loads(out)
     assert parsed["success"] is False, f"{bad_cmd} should be refused"
+    assert parsed["status"] == "blocked"
     err_lower = parsed["error"].lower()
-    assert "forbidden" in err_lower or "not in" in err_lower or "allowlist" in err_lower
+    assert "forbidden" in err_lower or "not in" in err_lower or "allowlist" in err_lower or "could not parse" in err_lower
 
 
 def test_run_test_dry_run_returns_plan(workspace_tree, clean_env, audit_override, monkeypatch):
@@ -238,7 +243,86 @@ def test_run_test_dry_run_returns_plan(workspace_tree, clean_env, audit_override
     parsed = json.loads(out)
     assert parsed["success"] is True
     assert parsed["dry_run"] is True
+    assert parsed["status"] == "dry_run"
+    assert parsed["plan"]["status"] == "dry_run"
+    assert parsed["plan"]["command_mode"] == "legacy_command"
     assert parsed["plan"]["argv"] == ["pytest", "-x"]
+    assert parsed["plan"]["workdir"] == str(workspace_tree)
+
+
+def test_run_test_reports_fail_status(workspace_tree, clean_env, audit_override, monkeypatch):
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+
+    def fake_runner(argv, timeout=120, workdir=None):
+        return (2, "", "assertion failed")
+
+    out = ows.hermes_workspace_run_test(
+        command="pytest", workdir=str(workspace_tree),
+        dry_run=False, runner=fake_runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert parsed["status"] == "fail"
+    assert parsed["exit_code"] == 2
+    assert parsed["stderr"] == "assertion failed"
+
+
+def test_run_test_reports_timeout_status(workspace_tree, clean_env, audit_override, monkeypatch):
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+
+    def fake_runner(argv, timeout=120, workdir=None):
+        return (124, "partial output", "timed out after 120s")
+
+    out = ows.hermes_workspace_run_test(
+        command="pytest", workdir=str(workspace_tree),
+        dry_run=False, runner=fake_runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert parsed["status"] == "timeout"
+    assert parsed["exit_code"] == 124
+    assert "timed out" in parsed["stderr"]
+
+
+def test_run_test_requires_workdir(clean_env, audit_override, monkeypatch):
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct")
+    out = ows.hermes_workspace_run_test(
+        command="pytest", workdir=None, dry_run=False,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert parsed["status"] == "blocked"
+    assert "workdir is required" in parsed["error"].lower()
+
+
+def test_run_test_audit_records_status_extra(workspace_tree, clean_env, audit_override, monkeypatch):
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+
+    def fake_runner(argv, timeout=120, workdir=None):
+        return (0, "tests passed", "")
+
+    ows.hermes_workspace_run_test(
+        command="pytest", workdir=str(workspace_tree),
+        dry_run=False, runner=fake_runner,
+    )
+    records = op.audit_tail(limit=1)
+    assert records[-1]["tool"] == "hermes_workspace_run_test"
+    assert records[-1]["status"] == "pass"
+    assert records[-1]["command_mode"] == "legacy_command"
+    assert records[-1]["argv"] == ["pytest"]
+    assert records[-1]["timeout"] == 120
+    assert records[-1]["exit_code"] == 0
 
 
 # --- git status / diff ---------------------------------------------------

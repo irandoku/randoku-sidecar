@@ -178,26 +178,44 @@ def _normalize_path(path: str | os.PathLike[str]) -> Path:
             return Path(str(path))
 
 
+def _normalize_hermes_data_root_from_parts(raw_text: str, separator: str) -> Path | None:
+    """Normalize profile/source suffixes using an explicit text separator."""
+    parts = raw_text.split(separator)
+    lowered = [part.lower() for part in parts]
+    if not lowered:
+        return None
+    if lowered[-1] == "hermes-agent":
+        return Path(separator.join(parts[:-1]))
+    if len(lowered) >= 2 and lowered[-2] == "profiles":
+        return Path(separator.join(parts[:-2]))
+    return None
+
+
 def normalize_hermes_data_root(path: str | os.PathLike[str] | None) -> Path | None:
     """Normalize a Hermes install path to the data root.
 
     ``.../profiles/<profile>`` -> ``...``
     ``.../hermes-agent`` -> ``...``
     Already-normalized data roots remain unchanged.
+    Windows-style path strings are also normalized on POSIX hosts.
     """
     if path is None:
         return None
-    raw = Path(os.path.expanduser(str(path)))
+    raw_text = os.path.expanduser(str(path))
+    raw = Path(raw_text)
     try:
         parts = [part.lower() for part in raw.parts]
     except Exception:
-        return raw
-    if not parts:
-        return raw
-    if parts[-1] == "hermes-agent":
-        return raw.parent
-    if len(parts) >= 2 and parts[-2] == "profiles":
-        return raw.parent.parent
+        parts = []
+    if parts:
+        if parts[-1] == "hermes-agent":
+            return raw.parent
+        if len(parts) >= 2 and parts[-2] == "profiles":
+            return raw.parent.parent
+    if "\\" in raw_text:
+        normalized = _normalize_hermes_data_root_from_parts(raw_text, "\\")
+        if normalized is not None:
+            return normalized
     return raw
 
 

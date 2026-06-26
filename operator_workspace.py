@@ -719,9 +719,10 @@ def _is_allowed_test_command(argv: list[str]) -> tuple[bool, str]:
     if not argv:
         return (False, "Empty command.")
     cmd = " ".join(argv)
+    cmd_lower = cmd.lower()
     # Reject dangerous substrings first.
     for needle in _DANGEROUS_PATTERNS:
-        if needle in cmd:
+        if needle.lower() in cmd_lower:
             return (False, f"Command contains forbidden substring {needle!r}.")
     for prefix, max_extra in _TEST_COMMAND_ALLOWLIST:
         if len(argv) >= len(prefix) and tuple(argv[: len(prefix)]) == prefix:
@@ -730,6 +731,20 @@ def _is_allowed_test_command(argv: list[str]) -> tuple[bool, str]:
                 return (False, f"Too many arguments for {prefix!r}.")
             return (True, "")
     return (False, "Command not in the test/lint allowlist.")
+
+
+def _workspace_test_status(returncode: int) -> str:
+    """Return the capability status for a completed test process."""
+    if returncode == 0:
+        return "pass"
+    if returncode == 124:
+        return "timeout"
+    return "fail"
+
+
+def _effective_test_timeout(timeout: int) -> int:
+    """Clamp test timeout to the same bound used by op.run_argv."""
+    return max(1, min(int(timeout), 600))
 
 
 def hermes_workspace_run_test(
@@ -742,8 +757,10 @@ def hermes_workspace_run_test(
     try:
         policy = op.OperatorPolicy()
         policy.require_level("workspace")
+        command_mode = "legacy_command"
         if not command or not command.strip():
             raise ValueError("command is required.")
+        effective_timeout = _effective_test_timeout(timeout)
 
         # Parse with shlex so we never invoke a shell.
         try:
@@ -755,20 +772,36 @@ def hermes_workspace_run_test(
         if not allowed:
             raise PermissionError(reason)
 
-        # workdir policy: must be under an allowed_path if any are set.
-        if workdir:
-            if policy.allowed_paths and not op.path_under_allowed(workdir, policy.allowed_paths):
-                raise PermissionError(
-                    f"workdir {workdir!r} is not under any allowed path."
-                )
+        if not workdir:
+            raise PermissionError("workdir is required for workspace test execution.")
+        if op.is_denied_path(workdir):
+            raise PermissionError(
+                f"workdir {workdir!r} is denied by the operator path safety policy."
+            )
+        if not policy.allowed_paths:
+            raise PermissionError(
+                "Workspace test execution is disabled because "
+                f"{op.OPERATOR_ALLOWED_PATHS_ENV} is empty. Set it to one or more "
+                "workspace root directories."
+            )
+        if not op.path_under_allowed(workdir, policy.allowed_paths):
+            raise PermissionError(
+                f"workdir {workdir!r} is not under any allowed path."
+            )
+        normalized_workdir = op._normalize_path(workdir)
+        if not normalized_workdir.exists() or not normalized_workdir.is_dir():
+            raise FileNotFoundError(f"workdir not found or not a directory: {workdir}")
+        workdir_text = str(normalized_workdir)
 
         if policy.effective_dry_run(dry_run):
             plan = {
                 "would_run": True,
+                "status": "dry_run",
+                "command_mode": command_mode,
                 "argv": argv,
                 "shell": False,
-                "workdir": workdir,
-                "timeout": max(1, min(int(timeout), 600)),
+                "workdir": workdir_text,
+                "timeout": effective_timeout,
             }
             op.audit_record(
                 tool="hermes_workspace_run_test",
@@ -778,31 +811,51 @@ def hermes_workspace_run_test(
                 success=True,
                 changed=False,
                 summary="dry-run plan",
-                path=workdir or "",
+                path=workdir_text,
+                extra={
+                    "status": "dry_run",
+                    "command_mode": command_mode,
+                    "argv": argv,
+                    "timeout": effective_timeout,
+                },
             )
-            return json.dumps({"success": True, "dry_run": True, "plan": plan}, indent=2)
+            return json.dumps({"success": True, "dry_run": True, "status": "dry_run", "plan": plan}, indent=2)
 
         policy.require_mutation(dry_run)
         run_fn = runner or op.run_argv
-        rc, out, err = run_fn(argv, timeout=timeout, workdir=workdir)
+        rc, out, err = run_fn(argv, timeout=effective_timeout, workdir=workdir_text)
+        status = _workspace_test_status(rc)
+        redacted_stdout = op.redact_output(out)
+        redacted_stderr = op.redact_output(err)
         result = {
-            "success": rc == 0,
+            "success": status == "pass",
             "dry_run": False,
+            "status": status,
+            "exit_code": rc,
             "returncode": rc,
             "argv": argv,
-            "stdout": op.redact_output(out),
-            "stderr": op.redact_output(err),
+            "workdir": workdir_text,
+            "timeout": effective_timeout,
+            "stdout": redacted_stdout,
+            "stderr": redacted_stderr,
         }
         op.audit_record(
             tool="hermes_workspace_run_test",
             level=policy.level,
             apply_mode=policy.apply_mode,
             dry_run=False,
-            success=rc == 0,
+            success=status == "pass",
             changed=False,  # test runs are not file mutations
-            summary=f"rc={rc} argv={argv}",
-            path=workdir or "",
-            error=op.redact_output(err) if rc != 0 else "",
+            summary=f"status={status} rc={rc} argv={argv}",
+            path=workdir_text,
+            error=redacted_stderr if status != "pass" else "",
+            extra={
+                "status": status,
+                "command_mode": command_mode,
+                "argv": argv,
+                "timeout": effective_timeout,
+                "exit_code": rc,
+            },
         )
         return json.dumps(result, indent=2)
     except Exception as exc:
@@ -813,8 +866,14 @@ def hermes_workspace_run_test(
             dry_run=dry_run,
             success=False,
             error=str(exc),
+            path=workdir or "",
+            extra={
+                "status": "blocked",
+                "command_mode": "legacy_command",
+                "refusal_reason": str(exc),
+            },
         )
-        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+        return json.dumps({"success": False, "dry_run": dry_run, "status": "blocked", "error": str(exc)}, indent=2)
 
 
 # ---------------------------------------------------------------------------
