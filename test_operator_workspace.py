@@ -196,6 +196,75 @@ def test_run_test_accepts_pytest(workspace_tree, clean_env, audit_override, monk
 
 
 @pytest.mark.parametrize(
+    "launcher",
+    [
+        "./venv/bin/python",
+        "venv/bin/python",
+        "./venv/bin/python3",
+        "./.venv/bin/python",
+        ".venv/bin/python3",
+        r".\venv\Scripts\python.exe",
+        r"venv\Scripts\python.exe",
+        r".\.venv\Scripts\python.exe",
+        r".venv\Scripts\python.exe",
+    ],
+)
+def test_repo_local_python_matcher_accepts_venv_launchers(launcher):
+    assert ows._is_repo_local_python(launcher) is True
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        "/usr/bin/python",
+        "../venv/bin/python",
+        "~/venv/bin/python",
+        "tmp/venv/bin/python",
+        "python",
+        "python3",
+        "venv/bin/pip",
+        r"C:\Users\me\venv\Scripts\python.exe",
+    ],
+)
+def test_repo_local_python_matcher_rejects_nonlocal_launchers(launcher):
+    assert ows._is_repo_local_python(launcher) is False
+
+
+@pytest.mark.parametrize(
+    "command, expected_argv",
+    [
+        ("./venv/bin/python -m pytest -q", ["./venv/bin/python", "-m", "pytest", "-q"]),
+        (
+            "venv/bin/python -m pytest test_operator_workspace.py -q",
+            ["venv/bin/python", "-m", "pytest", "test_operator_workspace.py", "-q"],
+        ),
+        ("./.venv/bin/python3 -m pytest -q", ["./.venv/bin/python3", "-m", "pytest", "-q"]),
+    ],
+)
+def test_run_test_accepts_repo_local_venv_pytest(
+    workspace_tree, clean_env, audit_override, monkeypatch, command, expected_argv
+):
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    captured = {}
+
+    def fake_runner(argv, timeout=120, workdir=None):
+        captured["argv"] = argv
+        return (0, "tests passed", "")
+
+    out = ows.hermes_workspace_run_test(
+        command=command, workdir=str(workspace_tree),
+        dry_run=False, runner=fake_runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["status"] == "pass"
+    assert captured["argv"] == expected_argv
+
+
+@pytest.mark.parametrize(
     "bad_cmd",
     [
         "rm -rf /",
@@ -214,6 +283,12 @@ def test_run_test_accepts_pytest(workspace_tree, clean_env, audit_override, monk
         "pytest; rm x",
         "pytest & rm x",
         "evil-binary --flag",
+        "/usr/bin/python -m pytest -q",
+        "../venv/bin/python -m pytest -q",
+        "./venv/bin/python -m pip install pytest",
+        "./venv/bin/python -c print(1)",
+        "./venv/bin/python -m pytest | tee log",
+        "./venv/bin/python -m pytest; rm x",
     ],
 )
 def test_run_test_rejects_dangerous_or_unallowed_commands(

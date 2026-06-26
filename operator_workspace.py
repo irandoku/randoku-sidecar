@@ -714,6 +714,27 @@ _DANGEROUS_PATTERNS: tuple[str, ...] = (
 )
 
 
+def _is_repo_local_python(argv0: str) -> bool:
+    """Return true for repo-local virtualenv Python launchers only."""
+    normalized = argv0.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if (
+        normalized.startswith("/")
+        or normalized.startswith("../")
+        or ":" in normalized
+    ):
+        return False
+    return normalized in {
+        "venv/bin/python",
+        "venv/bin/python3",
+        ".venv/bin/python",
+        ".venv/bin/python3",
+        "venv/Scripts/python.exe",
+        ".venv/Scripts/python.exe",
+    }
+
+
 def _is_allowed_test_command(argv: list[str]) -> tuple[bool, str]:
     """Check whether argv matches the test/lint allowlist."""
     if not argv:
@@ -724,6 +745,12 @@ def _is_allowed_test_command(argv: list[str]) -> tuple[bool, str]:
     for needle in _DANGEROUS_PATTERNS:
         if needle.lower() in cmd_lower:
             return (False, f"Command contains forbidden substring {needle!r}.")
+    if len(argv) >= 3 and _is_repo_local_python(argv[0]) and argv[1:3] == ["-m", "pytest"]:
+        extra = argv[3:]
+        max_extra = 8
+        if len(extra) > max_extra:
+            return (False, "Too many arguments for repo-local virtualenv pytest.")
+        return (True, "")
     for prefix, max_extra in _TEST_COMMAND_ALLOWLIST:
         if len(argv) >= len(prefix) and tuple(argv[: len(prefix)]) == prefix:
             extra = argv[len(prefix) :]
