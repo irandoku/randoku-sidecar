@@ -347,6 +347,43 @@ def hermes_run_command(command: str, timeout: int = 30, workdir: str | None = No
         raise clean_error("hermes_run_command", exc) from exc
 
 
+def _load_memory_store() -> Any:
+    """Build and load Hermes' file-backed memory store for one tool call.
+
+    Hermes' memory_tool requires an explicit MemoryStore instance when called
+    outside the AIAgent runtime. hermes-gpt is a sidecar, so it must supply the
+    store itself instead of calling memory_tool.memory_tool(..., store=None).
+    """
+    store_cls = getattr(memory_tool, "MemoryStore", None)
+    if store_cls is None:
+        raise RuntimeError("Hermes memory store is unavailable: MemoryStore is missing.")
+    store = store_cls()
+    load_from_disk = getattr(store, "load_from_disk", None)
+    if not callable(load_from_disk):
+        raise RuntimeError("Hermes memory store is unavailable: load_from_disk is missing.")
+    load_from_disk()
+    return store
+
+
+def _search_memory_store(store: Any, target: str, query: str | None) -> str:
+    if target not in {"memory", "user"}:
+        raise RuntimeError("Invalid target. Use memory or user.")
+    attr = "memory_entries" if target == "memory" else "user_entries"
+    entries = list(getattr(store, attr, []))
+    needle = (query or "").strip().lower()
+    matches = [entry for entry in entries if not needle or needle in entry.lower()]
+    return json.dumps(
+        {
+            "success": True,
+            "target": target,
+            "query": query or "",
+            "count": len(matches),
+            "matches": matches,
+        },
+        ensure_ascii=False,
+    )
+
+
 def hermes_memory(
     action: str,
     target: str = "memory",
@@ -355,11 +392,22 @@ def hermes_memory(
 ) -> str:
     try:
         require_imports()
-        if action not in {"add", "replace", "remove", "search"}:
+        normalized_action = (action or "").strip().lower()
+        normalized_target = (target or "memory").strip().lower()
+        if normalized_action not in {"add", "replace", "remove", "search"}:
             raise RuntimeError("Unsupported memory action. Use add, replace, remove, or search.")
-        if action in {"add", "replace", "remove"} and not env_enabled(ENABLE_MEMORY_WRITE_ENV):
+        if normalized_action in {"add", "replace", "remove"} and not env_enabled(ENABLE_MEMORY_WRITE_ENV):
             raise RuntimeError(f"Memory write actions are disabled. Set {ENABLE_MEMORY_WRITE_ENV}=1 to enable them.")
-        return memory_tool.memory_tool(action=action, target=target, content=content, old_text=old_text)
+        store = _load_memory_store()
+        if normalized_action == "search":
+            return _search_memory_store(store, normalized_target, content)
+        return memory_tool.memory_tool(
+            action=normalized_action,
+            target=normalized_target,
+            content=content,
+            old_text=old_text,
+            store=store,
+        )
     except Exception as exc:
         raise clean_error("hermes_memory", exc) from exc
 

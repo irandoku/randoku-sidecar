@@ -117,17 +117,59 @@ def test_memory_write_actions_are_disabled_by_default(monkeypatch):
 
 def test_memory_search_remains_available(monkeypatch):
     clear_gate_envs(monkeypatch)
+
+    class FakeMemoryStore:
+        def __init__(self):
+            self.memory_entries = []
+            self.user_entries = []
+
+        def load_from_disk(self):
+            self.memory_entries = ["alpha bug", "beta note", "ALPHA uppercase"]
+            self.user_entries = ["user prefers quiet logs"]
+
+    monkeypatch.setattr(server, "require_imports", lambda: None)
+    monkeypatch.setattr(server, "memory_tool", SimpleNamespace(MemoryStore=FakeMemoryStore))
+
+    result = json.loads(server.hermes_memory(action="search", target="memory", content="alpha"))
+    assert result == {
+        "success": True,
+        "target": "memory",
+        "query": "alpha",
+        "count": 2,
+        "matches": ["alpha bug", "ALPHA uppercase"],
+    }
+
+
+def test_memory_write_passes_loaded_store_when_enabled(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.ENABLE_MEMORY_WRITE_ENV, "1")
     captured = {}
+
+    class FakeMemoryStore:
+        def __init__(self):
+            self.loaded = False
+            self.memory_entries = []
+            self.user_entries = []
+
+        def load_from_disk(self):
+            self.loaded = True
 
     def fake_memory_tool(**kwargs):
         captured.update(kwargs)
-        return "memory search ok"
+        return "memory write ok"
 
     monkeypatch.setattr(server, "require_imports", lambda: None)
-    monkeypatch.setattr(server, "memory_tool", SimpleNamespace(memory_tool=fake_memory_tool))
+    monkeypatch.setattr(
+        server,
+        "memory_tool",
+        SimpleNamespace(MemoryStore=FakeMemoryStore, memory_tool=fake_memory_tool),
+    )
 
-    assert server.hermes_memory(action="search", target="memory") == "memory search ok"
-    assert captured["action"] == "search"
+    assert server.hermes_memory(action="add", target="memory", content="x") == "memory write ok"
+    assert captured["action"] == "add"
+    assert captured["target"] == "memory"
+    assert captured["content"] == "x"
+    assert captured["store"].loaded is True
 
 
 def test_terminal_direct_call_is_disabled_by_default(monkeypatch):
