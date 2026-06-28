@@ -116,6 +116,93 @@ def _gateway_state_path(profile_home: Path) -> Path:
     return profile_home / "gateway_state.json"
 
 
+def _parse_gateway_pid_text(raw: str) -> tuple[int | None, str | None]:
+    text = raw.strip()
+    if not text:
+        return (None, None)
+    try:
+        return (int(text), "pid_file_text")
+    except ValueError:
+        pass
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return (None, None)
+    if not isinstance(payload, dict):
+        return (None, None)
+    pid = payload.get("pid")
+    if isinstance(pid, int):
+        return (pid, "pid_file_json")
+    if isinstance(pid, str):
+        try:
+            return (int(pid.strip()), "pid_file_json")
+        except ValueError:
+            return (None, None)
+    return (None, None)
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        import psutil  # type: ignore
+
+        return psutil.pid_exists(pid)
+    except ImportError:
+        # Fall back to OS kill 0 probe.
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+        except Exception:
+            return False
+
+
+def _state_pid(state: dict[str, Any]) -> int | None:
+    pid = state.get("pid")
+    if isinstance(pid, int):
+        return pid
+    if isinstance(pid, str):
+        try:
+            return int(pid.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _gateway_adapters_summary(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    # Current Hermes schema: {"platforms": {"telegram": {"state": "connected"}}}
+    platforms = state.get("platforms")
+    if isinstance(platforms, dict):
+        adapters: list[dict[str, Any]] = []
+        for name, entry in sorted(platforms.items()):
+            if not isinstance(entry, dict):
+                continue
+            platform_state = entry.get("state")
+            adapters.append(
+                {
+                    "name": str(name),
+                    "connected": platform_state == "connected",
+                    "state": platform_state,
+                    "updated_at": entry.get("updated_at"),
+                    "error_code": entry.get("error_code"),
+                }
+            )
+        return (adapters, "platforms")
+
+    # Legacy upstream-derived schema: {"telegram": {"connected": true}}
+    adapters = []
+    for key in ("telegram", "discord", "slack", "signal", "whatsapp", "api_server"):
+        entry = state.get(key)
+        if isinstance(entry, dict):
+            adapters.append(
+                {
+                    "name": key,
+                    "connected": bool(entry.get("connected", False)),
+                }
+            )
+    return (adapters, "legacy_top_level")
+
+
 def hermes_gateway_status(
     profile: str = "default",
     hermes_root: Path | None = None,
@@ -128,26 +215,12 @@ def hermes_gateway_status(
         pid_path = _gateway_pid_path(profile_home)
         state_path = _gateway_state_path(profile_home)
         pid = None
+        pid_source = None
         if pid_path.exists():
             try:
-                pid = int(pid_path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
+                pid, pid_source = _parse_gateway_pid_text(pid_path.read_text(encoding="utf-8"))
+            except OSError:
                 pid = None
-        running = False
-        if pid is not None:
-            try:
-                import psutil  # type: ignore
-
-                running = psutil.pid_exists(pid)
-            except ImportError:
-                # Fall back to OS kill 0 probe.
-                try:
-                    os.kill(pid, 0)
-                    running = True
-                except (OSError, ProcessLookupError):
-                    running = False
-                except Exception:
-                    running = False
 
         state: dict[str, Any] = {}
         if state_path.exists():
@@ -155,6 +228,13 @@ def hermes_gateway_status(
                 state = json.loads(state_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 state = {}
+
+        if pid is None:
+            pid = _state_pid(state)
+            if pid is not None:
+                pid_source = "gateway_state"
+
+        running = _pid_exists(pid) if pid is not None else False
 
         # Cron ticker heartbeat.
         cron_dir = profile_home / "cron"
@@ -166,24 +246,20 @@ def hermes_gateway_status(
             except OSError:
                 ticker_heartbeat = None
 
-        # Adapter / telegram / discord connection info: surface only
-        # connected/unconnected booleans, no tokens.
-        adapters_summary: list[dict[str, Any]] = []
-        for key in ("telegram", "discord", "slack", "signal", "whatsapp", "api_server"):
-            entry = state.get(key)
-            if isinstance(entry, dict):
-                adapters_summary.append(
-                    {
-                        "name": key,
-                        "connected": bool(entry.get("connected", False)),
-                    }
-                )
+        # Adapter connection info: surface status booleans and non-secret
+        # runtime metadata only, no tokens.
+        adapters_summary, state_schema = _gateway_adapters_summary(state)
 
         result = {
             "success": True,
             "profile": profile,
             "gateway_pid": pid,
+            "pid_source": pid_source,
             "gateway_running": running,
+            "gateway_state": state.get("gateway_state"),
+            "state_updated_at": state.get("updated_at"),
+            "exit_reason": state.get("exit_reason"),
+            "state_schema": state_schema,
             "ticker_heartbeat_mtime": ticker_heartbeat,
             "adapters": adapters_summary,
         }

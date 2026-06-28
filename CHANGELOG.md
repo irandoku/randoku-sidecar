@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Fixed `hermes_gateway_status` to parse current Hermes gateway runtime files:
+  JSON `gateway.pid`, `gateway_state.json["pid"]`, and
+  `gateway_state.json["platforms"]`, while keeping compatibility with the legacy
+  plain PID file and top-level adapter schema.
+
 - Governed `hermes_memory` writes under OperatorPolicy (memory write-back v1).
   `add` / `replace` / `remove` now require operator level `skills_config` plus
   the mutation gate, take `dry_run` (default `True` → returns a plan with target

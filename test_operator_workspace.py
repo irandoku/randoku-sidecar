@@ -511,6 +511,29 @@ def test_gateway_status_no_pid_file(tmp_path, clean_env, audit_override):
     assert parsed["gateway_pid"] is None
 
 
+def test_gateway_status_with_text_pid_file(tmp_path, clean_env, audit_override):
+    (tmp_path / "gateway.pid").write_text(str(os.getpid()), encoding="utf-8")
+    out = ows.hermes_gateway_status(profile="default", hermes_root=tmp_path)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["gateway_pid"] == os.getpid()
+    assert parsed["pid_source"] == "pid_file_text"
+    assert parsed["gateway_running"] is True
+
+
+def test_gateway_status_with_json_pid_file(tmp_path, clean_env, audit_override):
+    (tmp_path / "gateway.pid").write_text(
+        json.dumps({"pid": os.getpid(), "kind": "hermes-gateway"}),
+        encoding="utf-8",
+    )
+    out = ows.hermes_gateway_status(profile="default", hermes_root=tmp_path)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["gateway_pid"] == os.getpid()
+    assert parsed["pid_source"] == "pid_file_json"
+    assert parsed["gateway_running"] is True
+
+
 def test_gateway_status_with_state_file(tmp_path, clean_env, audit_override):
     (tmp_path / "gateway_state.json").write_text(
         json.dumps({"telegram": {"connected": True}, "discord": {"connected": False}}),
@@ -522,6 +545,42 @@ def test_gateway_status_with_state_file(tmp_path, clean_env, audit_override):
     adapters = {a["name"]: a for a in parsed["adapters"]}
     assert adapters["telegram"]["connected"] is True
     assert adapters["discord"]["connected"] is False
+
+
+def test_gateway_status_with_current_state_schema(tmp_path, clean_env, audit_override):
+    (tmp_path / "gateway_state.json").write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "gateway_state": "running",
+                "updated_at": "2026-06-28T16:25:55.382938+00:00",
+                "exit_reason": None,
+                "platforms": {
+                    "telegram": {
+                        "state": "connected",
+                        "updated_at": "2026-06-28T16:25:51.449548+00:00",
+                    },
+                    "line": {"state": "connected"},
+                    "discord": {"state": "disconnected", "error_code": "not_configured"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = ows.hermes_gateway_status(profile="default", hermes_root=tmp_path)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["gateway_pid"] == os.getpid()
+    assert parsed["pid_source"] == "gateway_state"
+    assert parsed["gateway_running"] is True
+    assert parsed["gateway_state"] == "running"
+    assert parsed["state_schema"] == "platforms"
+    adapters = {a["name"]: a for a in parsed["adapters"]}
+    assert adapters["telegram"]["connected"] is True
+    assert adapters["telegram"]["state"] == "connected"
+    assert adapters["line"]["connected"] is True
+    assert adapters["discord"]["connected"] is False
+    assert adapters["discord"]["error_code"] == "not_configured"
 
 
 def test_gateway_restart_dry_run_returns_plan(tmp_path, clean_env, audit_override, monkeypatch):
