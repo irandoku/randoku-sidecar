@@ -1,6 +1,6 @@
 # randoku-sidecar
 
-![Randoku Sidecar branding](assets/randoku-sidecar-branding.jpg)
+![Randoku Sidecar branding](assets/randoku-sidecar-branding.png)
 
 `randoku-sidecar` is a policy-first MCP sidecar for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It imports selected local Hermes Agent internals at runtime and exposes them to MCP clients (Claude, ChatGPT, Cursor, Codex, opencode) **without modifying Hermes Agent source files**.
 

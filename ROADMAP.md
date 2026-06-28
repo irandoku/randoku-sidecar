@@ -7,7 +7,7 @@ This roadmap tracks the transition from a local `hermes-gpt`-derived MCP sidecar
 - [x] Confirm upstream license allows fork / modification / redistribution.
 - [x] Add attribution document.
 - [x] Add architecture document.
-- [ ] Rename package / README references after the backup policy is fixed.
+- [x] Rename package / README references after the backup policy is fixed.
 - [ ] Preserve upstream MIT license and copyright notices.
 - [x] Add changelog for Randoku-specific changes.
 
@@ -51,9 +51,9 @@ Goal: allow AI-assisted verification without opening arbitrary shell access.
 
 Deferred until the core tooling is stable.
 
-- [ ] Initialize `MemoryStore` when calling Hermes memory internals.
-- [ ] Implement or clarify memory search behavior.
-- [ ] Keep memory write guarded by explicit policy.
+- [x] Initialize `MemoryStore` when calling Hermes memory internals. (`server.py`)
+- [x] Implement or clarify memory search behavior. (`hermes_memory(action="search")`)
+- [x] Keep memory write guarded by explicit policy. (`RANDOKU_ENABLE_MEMORY_WRITE`)
 
 ## Non-goals for early versions
 

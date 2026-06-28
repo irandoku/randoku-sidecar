@@ -2,8 +2,9 @@
 
 Use this checklist before publishing any release artifact.
 
-- `python -m py_compile server.py test_server.py`
-- `python -m pytest`
+- `./venv/bin/python -m py_compile server.py test_server.py`
+- `./venv/bin/python -m pytest`
+- Confirm the release interpreter is Python 3.10+.
 - Confirm default tools exclude write, patch, terminal, and session search.
 - Confirm `--profile remote` refuses to start without the explicit unsafe bypass.
 - Confirm no private files are present:

@@ -43,6 +43,9 @@ py-modules = [
   "pyproject.toml",
   "CHANGELOG.md",
 ]
+"share/randoku-sidecar/assets" = [
+  "assets/randoku-sidecar-branding.png",
+]
 "share/randoku-sidecar/docs" = [
   "docs/operator-mode.md",
   "docs/release-notes-v0.2.0.md",

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Established the project identity as `randoku-sidecar`, including README,
+  package metadata, console script, environment variable names, example scripts,
+  operator docs, site copy, and attribution notes. This preserves the original
+  `hermes-gpt` lineage while making the fork independently branded.
+- Replaced the inherited branding image with a new randoku-sidecar visual asset,
+  updated README to reference `assets/randoku-sidecar-branding.png`, and included
+  the asset in packaging metadata.
+- Added read-only CodeGraph operator tools for status, file listing, search,
+  overview, and inspect workflows under the same workspace path policy.
 - Made the read-only operator tools fail-closed to match the write tools.
   `hermes_workspace_read`, `hermes_git_status`, and `hermes_git_diff` now
   require `RANDOKU_OPERATOR_ALLOWED_PATHS` to be set and the target path/workdir
@@ -11,7 +20,17 @@
   secret-like `pathspec`. Read/write path gating is now a single shared
   `OperatorPolicy` helper. This is a behavior change: operator read/git tools
   require an allow-list; the basic `hermes_read_file` tool is unaffected.
-
+- Allowed `workspace_run_test` to run repo-local virtualenv pytest launchers
+  such as `./venv/bin/python -m pytest` while continuing to reject system Python,
+  pip, shell metacharacters, and non-allowlisted commands.
+- Wired Hermes' file-backed `MemoryStore` into `hermes_memory`, so search and
+  gated write actions operate on the same loaded MEMORY.md / USER.md store used
+  by Hermes internals.
+- Added external memory context recall through Hermes' `MemoryManager`, defaulting
+  the sidecar wrapper to the `cli` platform for cross-entry-point recall.
+- Added a read-only memory write-back audit document covering flat-file memory,
+  provider proxy feasibility, Honcho conclusion scope, session-key collision
+  behavior, and lifecycle risks.
 - Added test coverage for `hermes_workspace_apply_diff`, the core single-file
   unified-diff mutation capability: policy gates (allowed paths, denied secret
   paths, missing files, empty diffs), dry-run vs direct apply, strict-parser
@@ -19,10 +38,13 @@
   multi-hunk application, and the git vs non-git backup policy.
 - Completed the operator tool-surface test to assert `hermes_workspace_apply_diff`
   is registered.
-- Updated `ROADMAP.md` to mark Phase 1 (backup policy) and Phase 2 (patch
-  capability) complete, matching the shipped and now-tested implementation.
+- Updated `ROADMAP.md` to mark the completed identity, backup policy, patch
+  capability, and memory initialization/search/gating work, matching the shipped
+  implementation.
 - Added a `Verification` section to the `workspace_apply_diff` capability
   contract mapping each clause to its covering tests.
+- Updated the release checklist to use the repo-local `./venv/bin/python`
+  interpreter and explicitly confirm Python 3.10+.
 
 ## 0.2.0 - 2026-06-21
 
