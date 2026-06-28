@@ -3,14 +3,14 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hermes-gpt"
+name = "randoku-sidecar"
 version = "0.2.0"
 description = "Local-dev MCP sidecar for exposing selected Hermes Agent capabilities."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-  { name = "hermes-gpt contributors" }
+  { name = "randoku-sidecar contributors" }
 ]
 dependencies = [
   "mcp[cli]",
@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-hermes-gpt = "server:main"
+randoku-sidecar = "server:main"
 
 [tool.setuptools]
 include-package-data = true
@@ -38,18 +38,18 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/hermes-gpt" = [
+"share/randoku-sidecar" = [
   "README.md",
   "pyproject.toml",
   "CHANGELOG.md",
 ]
-"share/hermes-gpt/docs" = [
+"share/randoku-sidecar/docs" = [
   "docs/operator-mode.md",
   "docs/release-notes-v0.2.0.md",
 ]
-"share/hermes-gpt/examples" = [
-  "examples/start-hermes-gpt.example.ps1",
-  "examples/status-hermes-gpt.example.ps1",
+"share/randoku-sidecar/examples" = [
+  "examples/start-randoku-sidecar.example.ps1",
+  "examples/status-randoku-sidecar.example.ps1",
   "examples/install-task.example.ps1",
 ]
 

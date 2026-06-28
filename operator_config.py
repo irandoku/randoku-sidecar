@@ -1,4 +1,4 @@
-"""Config and env operator tools for hermes-gpt.
+"""Config and env operator tools for randoku-sidecar.
 
 Tools:
 - ``hermes_config_get``          : read_only  — read config.yaml (sanitized)

@@ -62,7 +62,7 @@ def main() -> int:
 
     # 2: read small file
     t0 = time.time()
-    resp = mcp_call("hermes_read_file", {"path": r"C:\Users\asimo\hermes-gpt\pyproject.toml", "offset": 1, "limit": 20})
+    resp = mcp_call("hermes_read_file", {"path": r"C:\Users\asimo\randoku-sidecar\pyproject.toml", "offset": 1, "limit": 20})
     e = time.time() - t0
     c = resp.get("result", {}).get("content", [])
     t = c[0].get("text", "") if c else ""
@@ -70,7 +70,7 @@ def main() -> int:
 
     # 3: search small dir
     t0 = time.time()
-    resp = mcp_call("hermes_search_files", {"pattern": "version", "target": "content", "path": r"C:\Users\asimo\hermes-gpt", "file_glob": "pyproject.toml", "limit": 5})
+    resp = mcp_call("hermes_search_files", {"pattern": "version", "target": "content", "path": r"C:\Users\asimo\randoku-sidecar", "file_glob": "pyproject.toml", "limit": 5})
     e = time.time() - t0
     c = resp.get("result", {}).get("content", [])
     t = c[0].get("text", "") if c else ""

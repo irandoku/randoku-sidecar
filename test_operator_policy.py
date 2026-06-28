@@ -48,15 +48,15 @@ def test_env_truthy_reads_env(monkeypatch):
 def test_old_env_enabled_helper_still_works():
     """The old server.env_enabled() helper checks == '1' only. The new
     is_truthy is broader, but old behavior must remain intact for callers
-    that still use env_enabled (the broad HERMES_GPT_ENABLE_* flags)."""
+    that still use env_enabled (the broad RANDOKU_ENABLE_* flags)."""
     import server
 
-    os.environ["HERMES_GPT_TEST_OLD_FLAG"] = "1"
+    os.environ["RANDOKU_TEST_OLD_FLAG"] = "1"
     try:
-        assert server.env_enabled("HERMES_GPT_TEST_OLD_FLAG") is True
+        assert server.env_enabled("RANDOKU_TEST_OLD_FLAG") is True
     finally:
-        del os.environ["HERMES_GPT_TEST_OLD_FLAG"]
-    assert server.env_enabled("HERMES_GPT_TEST_OLD_FLAG") is False
+        del os.environ["RANDOKU_TEST_OLD_FLAG"]
+    assert server.env_enabled("RANDOKU_TEST_OLD_FLAG") is False
 
 
 # ---------------------------------------------------------------------------

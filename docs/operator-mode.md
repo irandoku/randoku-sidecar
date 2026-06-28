@@ -1,8 +1,8 @@
-# Operator Mode for hermes-gpt
+# Operator Mode for randoku-sidecar
 
-`hermes-gpt` is a local MCP bridge for exposing selected Hermes Agent capabilities to trusted MCP clients like ChatGPT. It is meant to run on your machine, bound to loopback, with a tunnel in front of it only when you deliberately want remote access.
+`randoku-sidecar` is a local MCP bridge for exposing selected Hermes Agent capabilities to trusted MCP clients like ChatGPT. It is meant to run on your machine, bound to loopback, with a tunnel in front of it only when you deliberately want remote access.
 
-Operator Mode is the safer control plane inside `hermes-gpt`. It exposes operator tools, but tool visibility does not mean mutation is allowed. Whether a call can change anything depends on:
+Operator Mode is the safer control plane inside `randoku-sidecar`. It exposes operator tools, but tool visibility does not mean mutation is allowed. Whether a call can change anything depends on:
 
 - the operator level
 - the server apply mode
@@ -13,7 +13,7 @@ Default posture should stay `dry_run` for always-on tunnel use.
 
 ## New user quickstart
 
-1. Install and run `hermes-gpt`.
+1. Install and run `randoku-sidecar`.
 2. Start it in dry-run Operator Mode.
 3. Connect ChatGPT or another MCP client to the tunnel URL.
 4. Call:
@@ -36,7 +36,7 @@ Behavior:
 Example:
 
 ```powershell
-hermes-gpt
+randoku-sidecar
 ```
 
 This is the safest starting point if you only want inspection.
@@ -56,10 +56,10 @@ Example:
 
 ```powershell
 $env:HERMES_HOME="C:\Users\<YOU>\AppData\Local\hermes"
-$env:HERMES_GPT_OPERATOR_ENABLED="1"
-$env:HERMES_GPT_OPERATOR_LEVEL="skills_config"
-$env:HERMES_GPT_OPERATOR_APPLY_MODE="dry_run"
-$env:HERMES_GPT_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
+$env:RANDOKU_OPERATOR_ENABLED="1"
+$env:RANDOKU_OPERATOR_LEVEL="skills_config"
+$env:RANDOKU_OPERATOR_APPLY_MODE="dry_run"
+$env:RANDOKU_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
 
 python server.py --http --host 127.0.0.1 --port 4750
 ```
@@ -80,10 +80,10 @@ Example:
 
 ```powershell
 $env:HERMES_HOME="C:\Users\<YOU>\AppData\Local\hermes"
-$env:HERMES_GPT_OPERATOR_ENABLED="1"
-$env:HERMES_GPT_OPERATOR_LEVEL="skills_config"
-$env:HERMES_GPT_OPERATOR_APPLY_MODE="direct"
-$env:HERMES_GPT_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
+$env:RANDOKU_OPERATOR_ENABLED="1"
+$env:RANDOKU_OPERATOR_LEVEL="skills_config"
+$env:RANDOKU_OPERATOR_APPLY_MODE="direct"
+$env:RANDOKU_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
 
 python server.py --http --host 127.0.0.1 --port 4750
 ```
@@ -109,10 +109,10 @@ Behavior:
 Example:
 
 ```powershell
-$env:HERMES_GPT_OPERATOR_ENABLED="1"
-$env:HERMES_GPT_OPERATOR_LEVEL="owner"
-$env:HERMES_GPT_OPERATOR_APPLY_MODE="direct"
-$env:HERMES_GPT_OWNER_ACK="I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE"
+$env:RANDOKU_OPERATOR_ENABLED="1"
+$env:RANDOKU_OPERATOR_LEVEL="owner"
+$env:RANDOKU_OPERATOR_APPLY_MODE="direct"
+$env:RANDOKU_OWNER_ACK="I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE"
 ```
 
 Do not use Owner Mode for public, shared, or always-on connectors.
@@ -136,13 +136,13 @@ Higher levels include the lower levels before them.
 
 ## Dry-run vs direct: the important bit
 
-`HERMES_GPT_OPERATOR_APPLY_MODE=dry_run` means mutating tools only preview.
-`HERMES_GPT_OPERATOR_APPLY_MODE=direct` means the server permits direct mutation.
+`RANDOKU_OPERATOR_APPLY_MODE=dry_run` means mutating tools only preview.
+`RANDOKU_OPERATOR_APPLY_MODE=direct` means the server permits direct mutation.
 
 But every mutating call still defaults to `dry_run=true`.
 Actual mutation requires both:
 
-- `HERMES_GPT_OPERATOR_APPLY_MODE=direct`
+- `RANDOKU_OPERATOR_APPLY_MODE=direct`
 - tool argument `dry_run=false`
 
 Dry-run cron move:
@@ -186,10 +186,10 @@ Safe tunnel posture example:
 
 ```powershell
 $env:HERMES_HOME="C:\Users\<YOU>\AppData\Local\hermes"
-$env:HERMES_GPT_OPERATOR_ENABLED="1"
-$env:HERMES_GPT_OPERATOR_LEVEL="skills_config"
-$env:HERMES_GPT_OPERATOR_APPLY_MODE="dry_run"
-$env:HERMES_GPT_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
+$env:RANDOKU_OPERATOR_ENABLED="1"
+$env:RANDOKU_OPERATOR_LEVEL="skills_config"
+$env:RANDOKU_OPERATOR_APPLY_MODE="dry_run"
+$env:RANDOKU_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
 
 python server.py --http --host 127.0.0.1 --port 4750
 ```
@@ -201,7 +201,7 @@ Hermes data root is usually:
 - Windows: `C:\Users\<YOU>\AppData\Local\hermes`
 - Unix/macOS style: `~/.hermes`
 
-If `HERMES_HOME` points to a named profile or `hermes-agent`, `hermes-gpt` normalizes back to the data root for operator profile operations.
+If `HERMES_HOME` points to a named profile or `hermes-agent`, `randoku-sidecar` normalizes back to the data root for operator profile operations.
 The default profile maps to the data root.
 Named profiles map to `profiles/<profile-name>`.
 
@@ -209,8 +209,8 @@ Named profiles map to `profiles/<profile-name>`.
 
 Audit log path:
 
-- `%USERPROFILE%\AppData\Local\hermes\logs\hermes_gpt_operator_audit.jsonl` (preferred)
-- `<hermes-gpt>\logs\hermes_gpt_operator_audit.jsonl` (fallback)
+- `%USERPROFILE%\AppData\Local\hermes\logs\randoku_operator_audit.jsonl` (preferred)
+- `<randoku-sidecar>\logs\randoku_operator_audit.jsonl` (fallback)
 
 What is logged:
 
@@ -271,9 +271,9 @@ That denial applies even in higher modes.
 
 Check all of these:
 
-- `HERMES_GPT_OPERATOR_ENABLED`
-- `HERMES_GPT_OPERATOR_LEVEL`
-- `HERMES_GPT_OPERATOR_APPLY_MODE`
+- `RANDOKU_OPERATOR_ENABLED`
+- `RANDOKU_OPERATOR_LEVEL`
+- `RANDOKU_OPERATOR_APPLY_MODE`
 - the tool call’s `dry_run` argument
 
 A refusal here is usually correct behavior, not a bug.
@@ -283,7 +283,7 @@ A refusal here is usually correct behavior, not a bug.
 That is expected unless the exact owner acknowledgement is set:
 
 ```powershell
-$env:HERMES_GPT_OWNER_ACK="I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE"
+$env:RANDOKU_OWNER_ACK="I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE"
 ```
 
 If the string differs, owner tools should still refuse.

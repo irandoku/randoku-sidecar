@@ -293,7 +293,7 @@ def test_http_initialize_smoke(monkeypatch):
             raise AssertionError(f"HTTP MCP server did not respond: {last_error}")
 
         parsed = json.loads(response_text)
-        assert parsed["result"]["serverInfo"]["name"] == "hermes-gpt"
+        assert parsed["result"]["serverInfo"]["name"] == "randoku-sidecar"
     finally:
         if proc.poll() is None:
             proc.terminate()

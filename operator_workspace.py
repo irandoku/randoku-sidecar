@@ -1,4 +1,4 @@
-"""Workspace, gateway, git, and owner-mode tools for hermes-gpt.
+"""Workspace, gateway, git, and owner-mode tools for randoku-sidecar.
 
 Tools:
 - ``hermes_gateway_status``        : read_only  — gateway / ticker / adapter health

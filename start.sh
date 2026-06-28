@@ -1,8 +1,8 @@
 #!/bin/bash
-# hermes-gpt 啟動腳本（Operator Mode: workspace + memory + session search）
+# randoku-sidecar 啟動腳本（Operator Mode: workspace + memory + session search）
 # 用法：./start.sh
 #
-# 開放能力（依 hermes-gpt 實際權限模型）：
+# 開放能力（依 randoku-sidecar 實際權限模型）：
 #   - read_only: 檔案讀取、cron 列出、skill 檢視
 #   - cron: cron 調整
 #   - skills: SKILL.md create/edit/patch/write_file/delete
@@ -16,11 +16,11 @@
 
 set -e
 
-HERMES_GPT_DIR="$HOME/Projects/randoku-sidecar"
+RANDOKU_DIR="$HOME/Projects/randoku-sidecar"
 HERMES_HOME="$HOME/.hermes"
 OBSIDIAN_VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Kenzen"
 
-cd "$HERMES_GPT_DIR"
+cd "$RANDOKU_DIR"
 
 # 檢查虛擬環境
 if [[ ! -d "venv" ]]; then
@@ -35,16 +35,16 @@ source venv/bin/activate
 export HERMES_HOME="$HERMES_HOME"
 
 # === Operator Mode: workspace level + legacy gates ===
-export HERMES_GPT_OPERATOR_ENABLED=1
-export HERMES_GPT_OPERATOR_APPLY_MODE=direct
-export HERMES_GPT_OPERATOR_LEVEL=workspace
-export HERMES_GPT_OPERATOR_ALLOWED_PROFILES="default"
-export HERMES_GPT_OPERATOR_ALLOWED_PATHS="$OBSIDIAN_VAULT,$HOME/Projects,$HOME/Downloads"
+export RANDOKU_OPERATOR_ENABLED=1
+export RANDOKU_OPERATOR_APPLY_MODE=direct
+export RANDOKU_OPERATOR_LEVEL=workspace
+export RANDOKU_OPERATOR_ALLOWED_PROFILES="default"
+export RANDOKU_OPERATOR_ALLOWED_PATHS="$OBSIDIAN_VAULT,$HOME/Projects,$HOME/Downloads"
 # Legacy gates (terminal intentionally disabled — high risk)
-export HERMES_GPT_ENABLE_MEMORY_WRITE=1
-export HERMES_GPT_ENABLE_SESSION_SEARCH=1
+export RANDOKU_ENABLE_MEMORY_WRITE=1
+export RANDOKU_ENABLE_SESSION_SEARCH=1
 
-echo "🚀 啟動 hermes-gpt MCP sidecar（Operator: workspace + memory + session search）..."
+echo "🚀 啟動 randoku-sidecar MCP sidecar（Operator: workspace + memory + session search）..."
 echo "   HERMES_HOME=$HERMES_HOME"
 echo "   Server: http://127.0.0.1:4750/mcp"
 echo "   Level: workspace (skills + config + workspace write)"

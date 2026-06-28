@@ -599,11 +599,11 @@ def test_tool_registration_includes_new_operator_tools(monkeypatch):
     import server
 
     for name in [
-        "HERMES_GPT_ENABLE_WRITE",
-        "HERMES_GPT_ENABLE_MEMORY_WRITE",
-        "HERMES_GPT_ENABLE_SESSION_SEARCH",
-        "HERMES_GPT_ENABLE_TERMINAL",
-        "HERMES_GPT_UNSAFE_REMOTE_NOAUTH",
+        "RANDOKU_ENABLE_WRITE",
+        "RANDOKU_ENABLE_MEMORY_WRITE",
+        "RANDOKU_ENABLE_SESSION_SEARCH",
+        "RANDOKU_ENABLE_TERMINAL",
+        "RANDOKU_UNSAFE_REMOTE_NOAUTH",
         op.OPERATOR_ENABLED_ENV,
         op.OPERATOR_LEVEL_ENV,
         op.OPERATOR_APPLY_MODE_ENV,
@@ -662,11 +662,11 @@ def test_existing_read_tools_still_present(monkeypatch):
     import server
 
     for name in [
-        "HERMES_GPT_ENABLE_WRITE",
-        "HERMES_GPT_ENABLE_MEMORY_WRITE",
-        "HERMES_GPT_ENABLE_SESSION_SEARCH",
-        "HERMES_GPT_ENABLE_TERMINAL",
-        "HERMES_GPT_UNSAFE_REMOTE_NOAUTH",
+        "RANDOKU_ENABLE_WRITE",
+        "RANDOKU_ENABLE_MEMORY_WRITE",
+        "RANDOKU_ENABLE_SESSION_SEARCH",
+        "RANDOKU_ENABLE_TERMINAL",
+        "RANDOKU_UNSAFE_REMOTE_NOAUTH",
     ]:
         monkeypatch.delenv(name, raising=False)
 

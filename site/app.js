@@ -140,7 +140,7 @@ if (btnRunSimulation) {
     chatBox.innerHTML = '';
     serverLogs.innerHTML = `
       <div class="log-line system">[SYSTEM] Server started on 127.0.0.1:4750</div>
-      <div class="log-line system">[SYSTEM] Tunnel active: https://hermes-gpt-tunnel.trycloudflare.com/mcp</div>
+      <div class="log-line system">[SYSTEM] Tunnel active: https://randoku-sidecar-tunnel.trycloudflare.com/mcp</div>
     `;
 
     // A. Add user message to Chat
@@ -152,7 +152,7 @@ if (btnRunSimulation) {
     } else if (selectedTool === 'write') {
       userPromptText = 'Update config.json and set port to 8080.';
     } else if (selectedTool === 'memory') {
-      userPromptText = 'Save that my project is called "Hermes GPT" to memory.';
+      userPromptText = 'Save that my project is called "Randoku Sidecar" to memory.';
     }
 
     const userMessageDiv = document.createElement('div');
@@ -193,7 +193,7 @@ if (btnRunSimulation) {
       } else if (selectedTool === 'write') {
         reqLog.innerHTML = `[MCP] Call tool: hermes_write_file(path="config.json", content="{\\n  \\"port\\": 8080\\n}")`;
       } else if (selectedTool === 'memory') {
-        reqLog.innerHTML = `[MCP] Call tool: hermes_memory(action="add", content="project name is Hermes GPT")`;
+        reqLog.innerHTML = `[MCP] Call tool: hermes_memory(action="add", content="project name is Randoku Sidecar")`;
       }
       serverLogs.appendChild(reqLog);
       serverLogs.scrollTop = serverLogs.scrollHeight;
@@ -215,7 +215,7 @@ if (btnRunSimulation) {
         
         botResponse.innerHTML = `
           <p>I've read the local <code>README.md</code>. Here is the project headline:</p>
-          <pre style="margin-top: 8px; font-family: var(--font-mono); font-size: 11px; background: rgba(255,255,255,0.06); padding: 8px; border-radius: 6px;"># hermes-gpt\n\nhermes-gpt is a standalone MCP sidecar for Hermes Agent.</pre>
+          <pre style="margin-top: 8px; font-family: var(--font-mono); font-size: 11px; background: rgba(255,255,255,0.06); padding: 8px; border-radius: 6px;"># randoku-sidecar\n\nrandoku-sidecar is a standalone MCP sidecar for Hermes Agent.</pre>
         `;
         showToast('Local Read executed successfully');
       } 
@@ -238,10 +238,10 @@ if (btnRunSimulation) {
           showToast('Local Command executed successfully');
         } else {
           execLog.className = 'log-line error';
-          execLog.innerHTML = `[SECURITY] Gated call rejected: hermes_run_command is disabled.\n[SECURITY] To enable terminal execution, start server with: HERMES_GPT_ENABLE_TERMINAL=1`;
+          execLog.innerHTML = `[SECURITY] Gated call rejected: hermes_run_command is disabled.\n[SECURITY] To enable terminal execution, start server with: RANDOKU_ENABLE_TERMINAL=1`;
           serverLogs.appendChild(execLog);
           
-          botResponse.innerHTML = `<p><strong>Error: Security Gate Blocked.</strong> The terminal command execution tool is hidden from MCP clients. To allow this action, set the local environment variable <code>HERMES_GPT_ENABLE_TERMINAL=1</code> on your sidecar server and restart.</p>`;
+          botResponse.innerHTML = `<p><strong>Error: Security Gate Blocked.</strong> The terminal command execution tool is hidden from MCP clients. To allow this action, set the local environment variable <code>RANDOKU_ENABLE_TERMINAL=1</code> on your sidecar server and restart.</p>`;
           showToast('Security gate blocked terminal command');
         }
       } 
@@ -256,10 +256,10 @@ if (btnRunSimulation) {
           showToast('Local File written successfully');
         } else {
           execLog.className = 'log-line error';
-          execLog.innerHTML = `[SECURITY] Gated call rejected: hermes_write_file is disabled.\n[SECURITY] To enable writes, start server with: HERMES_GPT_ENABLE_WRITE=1`;
+          execLog.innerHTML = `[SECURITY] Gated call rejected: hermes_write_file is disabled.\n[SECURITY] To enable writes, start server with: RANDOKU_ENABLE_WRITE=1`;
           serverLogs.appendChild(execLog);
           
-          botResponse.innerHTML = `<p><strong>Error: Security Gate Blocked.</strong> Write operations are disabled. Enable write/patch actions by launching the sidecar with the environment variable <code>HERMES_GPT_ENABLE_WRITE=1</code>.</p>`;
+          botResponse.innerHTML = `<p><strong>Error: Security Gate Blocked.</strong> Write operations are disabled. Enable write/patch actions by launching the sidecar with the environment variable <code>RANDOKU_ENABLE_WRITE=1</code>.</p>`;
           showToast('Security gate blocked file write');
         }
       } 
@@ -274,10 +274,10 @@ if (btnRunSimulation) {
           showToast('Memory updated successfully');
         } else {
           execLog.className = 'log-line error';
-          execLog.innerHTML = `[SECURITY] Gated call rejected: hermes_memory (write) is disabled.\n[SECURITY] To enable memory edits, start server with: HERMES_GPT_ENABLE_MEMORY_WRITE=1`;
+          execLog.innerHTML = `[SECURITY] Gated call rejected: hermes_memory (write) is disabled.\n[SECURITY] To enable memory edits, start server with: RANDOKU_ENABLE_MEMORY_WRITE=1`;
           serverLogs.appendChild(execLog);
           
-          botResponse.innerHTML = `<p><strong>Error: Security Gate Blocked.</strong> Memory writes are disabled. Set <code>HERMES_GPT_ENABLE_MEMORY_WRITE=1</code> to allow saving new memories.</p>`;
+          botResponse.innerHTML = `<p><strong>Error: Security Gate Blocked.</strong> Memory writes are disabled. Set <code>RANDOKU_ENABLE_MEMORY_WRITE=1</code> to allow saving new memories.</p>`;
           showToast('Security gate blocked memory write');
         }
       }

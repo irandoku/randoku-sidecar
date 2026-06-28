@@ -1,4 +1,4 @@
-"""Cron operator tools for hermes-gpt.
+"""Cron operator tools for randoku-sidecar.
 
 All operations are tier-gated by ``OperatorPolicy``:
 

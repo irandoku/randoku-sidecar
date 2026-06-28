@@ -1,4 +1,4 @@
-"""Skill operator tools for hermes-gpt.
+"""Skill operator tools for randoku-sidecar.
 
 All operations are tier-gated by ``OperatorPolicy``:
 

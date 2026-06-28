@@ -20,11 +20,11 @@ import operator_workspace as op_workspace
 LOCAL_DEV_PROFILE = "local-dev"
 REMOTE_PROFILE = "remote"
 UNSAFE_REMOTE_ACK = "--i-understand-this-is-unsafe"
-UNSAFE_REMOTE_ENV = "HERMES_GPT_UNSAFE_REMOTE_NOAUTH"
-ENABLE_WRITE_ENV = "HERMES_GPT_ENABLE_WRITE"
-ENABLE_MEMORY_WRITE_ENV = "HERMES_GPT_ENABLE_MEMORY_WRITE"
-ENABLE_SESSION_SEARCH_ENV = "HERMES_GPT_ENABLE_SESSION_SEARCH"
-ENABLE_TERMINAL_ENV = "HERMES_GPT_ENABLE_TERMINAL"
+UNSAFE_REMOTE_ENV = "RANDOKU_UNSAFE_REMOTE_NOAUTH"
+ENABLE_WRITE_ENV = "RANDOKU_ENABLE_WRITE"
+ENABLE_MEMORY_WRITE_ENV = "RANDOKU_ENABLE_MEMORY_WRITE"
+ENABLE_SESSION_SEARCH_ENV = "RANDOKU_ENABLE_SESSION_SEARCH"
+ENABLE_TERMINAL_ENV = "RANDOKU_ENABLE_TERMINAL"
 NOAUTH_META = {"securitySchemes": [{"type": "noauth"}]}
 
 HERMES_ROOT: Path | None = None
@@ -142,7 +142,7 @@ def import_hermes() -> None:
 
             skill_manager_tool = smt
         except Exception as exc:
-            eprint(f"hermes-gpt: skill manager unavailable: {exc}")
+            eprint(f"randoku-sidecar: skill manager unavailable: {exc}")
 
         try:
             from hermes_state import SessionDB as SDB
@@ -151,10 +151,10 @@ def import_hermes() -> None:
             SessionDB = SDB
             get_hermes_home = ghh
         except Exception as exc:
-            eprint(f"hermes-gpt: session search unavailable: {exc}")
+            eprint(f"randoku-sidecar: session search unavailable: {exc}")
     except Exception as exc:
         IMPORT_ERROR = str(exc)
-        eprint(f"hermes-gpt: Hermes imports failed: {exc}")
+        eprint(f"randoku-sidecar: Hermes imports failed: {exc}")
 
 
 def call_with_supported_kwargs(func: Any, **kwargs: Any) -> Any:
@@ -253,12 +253,12 @@ def discover_skills() -> list[dict[str, str]]:
             try:
                 skills.append(parse_skill_doc(skill_md))
             except Exception as exc:
-                eprint(f"hermes-gpt: could not read skill {skill_md}: {exc}")
+                eprint(f"randoku-sidecar: could not read skill {skill_md}: {exc}")
     return sorted(skills, key=lambda item: (item["name"].lower(), item["path"].lower()))
 
 
 def clean_error(tool_name: str, exc: Exception) -> RuntimeError:
-    eprint(f"hermes-gpt: {tool_name} failed: {exc}")
+    eprint(f"randoku-sidecar: {tool_name} failed: {exc}")
     return RuntimeError(f"{tool_name} failed: {exc}")
 
 
@@ -352,7 +352,7 @@ def _load_memory_store() -> Any:
     """Build and load Hermes' file-backed memory store for one tool call.
 
     Hermes' memory_tool requires an explicit MemoryStore instance when called
-    outside the AIAgent runtime. hermes-gpt is a sidecar, so it must supply the
+    outside the AIAgent runtime. randoku-sidecar is a sidecar, so it must supply the
     store itself instead of calling memory_tool.memory_tool(..., store=None).
     """
     store_cls = getattr(memory_tool, "MemoryStore", None)
@@ -541,7 +541,7 @@ def hermes_session_search(query: str, limit: int = 20, offset: int = 0) -> str:
         return "\n".join(rendered)
     except Exception as exc:
         message = f"Hermes session search is unavailable in this install: {exc}"
-        eprint(f"hermes-gpt: {message}")
+        eprint(f"randoku-sidecar: {message}")
         return message
 
 
@@ -567,7 +567,7 @@ def hermes_session_read(session_id: str, limit: int = 80, offset: int = 0) -> st
         return f"Session: {session_id}\nMessages: {len(rows)}\n\n{body}"
     except Exception as exc:
         message = f"Hermes session read is unavailable in this install: {exc}"
-        eprint(f"hermes-gpt: {message}")
+        eprint(f"randoku-sidecar: {message}")
         return message
 
 
@@ -614,7 +614,7 @@ def hermes_session_recall(query: str, top_k: int = 3, context_window: int = 20) 
         return "\n\n====================\n\n".join(blocks) if blocks else "No recall context could be expanded."
     except Exception as exc:
         message = f"Hermes session recall is unavailable in this install: {exc}"
-        eprint(f"hermes-gpt: {message}")
+        eprint(f"randoku-sidecar: {message}")
         return message
 
 
@@ -744,7 +744,7 @@ def hermes_operator_status() -> str:
         ]
         result = {
             "success": True,
-            "hermes_gpt_project_path": project_path,
+            "randoku_project_path": project_path,
             "hermes_agent_root": agent_root,
             "default_hermes_root": default_root,
             "active_profile": active_profile,
@@ -1109,7 +1109,7 @@ def build_server(
     include_local_settings: bool = False,
 ) -> FastMCP:
     server = FastMCP(
-        "hermes-gpt",
+        "randoku-sidecar",
         host=host,
         port=port,
         streamable_http_path="/mcp",
@@ -1235,7 +1235,7 @@ def main() -> None:
     if args.profile == LOCAL_DEV_PROFILE and not is_loopback_host(args.host):
         eprint(
             "WARNING: local-dev profile is bound to a non-loopback host. "
-            "Do not expose hermes-gpt without real authentication."
+            "Do not expose randoku-sidecar without real authentication."
         )
     if args.profile == REMOTE_PROFILE:
         eprint("WARNING: remote no-auth mode is explicitly unsafe and intended only for temporary experiments.")
@@ -1243,11 +1243,11 @@ def main() -> None:
     transport = "streamable-http" if args.http else "sse" if args.sse else "stdio"
     server = build_server(host=args.host, port=args.port, http=args.http)
     if transport == "stdio":
-        eprint("hermes-gpt MCP server starting in stdio mode.")
+        eprint("randoku-sidecar MCP server starting in stdio mode.")
         server.run(transport="stdio")
     else:
         path = "/mcp" if args.http else "/sse"
-        eprint(f"hermes-gpt MCP server running at http://{args.host}:{args.port}{path}")
+        eprint(f"randoku-sidecar MCP server running at http://{args.host}:{args.port}{path}")
 
         # Run with uvicorn instead of FastMCP.run() so TLS can be enabled for
         # local-only testing when cert/key are provided.

@@ -16,7 +16,7 @@ dist/
 build/
 *.egg-info/
 .cloudflared.pid
-.hermes-gpt.pid
+.randoku-sidecar.pid
 tmp-operator-test/
 logs/
 .vercel/

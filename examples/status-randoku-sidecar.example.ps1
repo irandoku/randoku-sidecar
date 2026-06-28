@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Example status script for hermes-gpt and its MCP tunnel.
+    Example status script for randoku-sidecar and its MCP tunnel.
 .DESCRIPTION
     Reports the local listener, the tunnel URL, and the MCP tool surface.
     Safe to adapt for your own machine.

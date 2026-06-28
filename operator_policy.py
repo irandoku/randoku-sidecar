@@ -1,4 +1,4 @@
-"""Operator policy, audit log, path safety, and profile helpers for hermes-gpt.
+"""Operator policy, audit log, path safety, and profile helpers for randoku-sidecar.
 
 This module is the foundational layer for the tiered Operator / Owner control
 plane. It is import-safe: Hermes internals are loaded lazily and failures
@@ -31,19 +31,19 @@ from typing import Any, Iterable, Optional
 # Env var names
 # ---------------------------------------------------------------------------
 
-OPERATOR_ENABLED_ENV = "HERMES_GPT_OPERATOR_ENABLED"
-OPERATOR_LEVEL_ENV = "HERMES_GPT_OPERATOR_LEVEL"
-OPERATOR_APPLY_MODE_ENV = "HERMES_GPT_OPERATOR_APPLY_MODE"
-OPERATOR_ALLOWED_PROFILES_ENV = "HERMES_GPT_OPERATOR_ALLOWED_PROFILES"
-OPERATOR_ALLOWED_PATHS_ENV = "HERMES_GPT_OPERATOR_ALLOWED_PATHS"
-OPERATOR_DENIED_PATHS_ENV = "HERMES_GPT_OPERATOR_DENIED_PATHS"
-OWNER_ACK_ENV = "HERMES_GPT_OWNER_ACK"
+OPERATOR_ENABLED_ENV = "RANDOKU_OPERATOR_ENABLED"
+OPERATOR_LEVEL_ENV = "RANDOKU_OPERATOR_LEVEL"
+OPERATOR_APPLY_MODE_ENV = "RANDOKU_OPERATOR_APPLY_MODE"
+OPERATOR_ALLOWED_PROFILES_ENV = "RANDOKU_OPERATOR_ALLOWED_PROFILES"
+OPERATOR_ALLOWED_PATHS_ENV = "RANDOKU_OPERATOR_ALLOWED_PATHS"
+OPERATOR_DENIED_PATHS_ENV = "RANDOKU_OPERATOR_DENIED_PATHS"
+OWNER_ACK_ENV = "RANDOKU_OWNER_ACK"
 
 OWNER_ACK_REQUIRED_VALUE = "I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE"
 
 # Default audit log locations (tried in order; first writable wins).
-AUDIT_LOG_HERMES_PATH = Path.home() / "AppData" / "Local" / "hermes" / "logs" / "hermes_gpt_operator_audit.jsonl"
-AUDIT_LOG_FALLBACK_PATH = Path(__file__).resolve().parent / "logs" / "hermes_gpt_operator_audit.jsonl"
+AUDIT_LOG_HERMES_PATH = Path.home() / "AppData" / "Local" / "hermes" / "logs" / "randoku_operator_audit.jsonl"
+AUDIT_LOG_FALLBACK_PATH = Path(__file__).resolve().parent / "logs" / "randoku_operator_audit.jsonl"
 
 # Override hook for tests: when set, the audit log is written/read from this
 # path instead of the production locations. Set via ``set_audit_log_override``.
@@ -320,7 +320,7 @@ def validate_profile_name(name: str) -> str:
 
 
 def parse_allowed_profiles(raw: str | None) -> list[str]:
-    """Parse the HERMES_GPT_OPERATOR_ALLOWED_PROFILES env value.
+    """Parse the RANDOKU_OPERATOR_ALLOWED_PROFILES env value.
 
     Returns a list of canonical profile names. ``"*"`` is preserved as a
     sentinel meaning "all existing profiles".

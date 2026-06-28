@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hermes GPT — Standalone Local MCP Sidecar for Hermes Agent</title>
+  <title>Randoku Sidecar — Standalone Local MCP Sidecar for Hermes Agent</title>
   <meta name="description" content="Expose your local Hermes Agent tools—including terminal commands, file access, and memory—to ChatGPT and other MCP clients via a secure local-dev sidecar.">
   <meta name="theme-color" content="#030303">
-  <meta property="og:title" content="Hermes GPT">
+  <meta property="og:title" content="Randoku Sidecar">
   <meta property="og:description" content="Local Model Context Protocol (MCP) sidecar for ChatGPT and Hermes Agent.">
-  <meta property="og:image" content="./assets/hermes-gpt-branding.jpg">
+  <meta property="og:image" content="./assets/randoku-sidecar-branding.jpg">
   <meta name="twitter:card" content="summary_large_image">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,10 +24,10 @@
   <main class="page" id="top">
     <!-- Navigation Bar -->
     <header class="topbar reveal">
-      <a class="brand" href="#top" aria-label="Hermes GPT Home">
+      <a class="brand" href="#top" aria-label="Randoku Sidecar Home">
         <span class="brand-mark" aria-hidden="true">HG</span>
         <span class="brand-copy">
-          <strong>Hermes GPT</strong>
+          <strong>Randoku Sidecar</strong>
           <small>local-dev sidecar</small>
         </span>
       </a>
@@ -39,7 +39,7 @@
         <a href="#install">Install</a>
       </nav>
 
-      <a class="ghost-link" href="https://github.com/asimons81/hermes-gpt" rel="noreferrer noopener" target="_blank">GitHub</a>
+      <a class="ghost-link" href="https://github.com/asimons81/randoku-sidecar" rel="noreferrer noopener" target="_blank">GitHub</a>
     </header>
 
     <!-- Hero Section -->
@@ -56,7 +56,7 @@
             <span>Install Server</span>
             <span class="btn-arrow" aria-hidden="true">→</span>
           </a>
-          <a class="button button-secondary" href="https://github.com/asimons81/hermes-gpt#readme" rel="noreferrer noopener" target="_blank">View GitHub Repo</a>
+          <a class="button button-secondary" href="https://github.com/asimons81/randoku-sidecar#readme" rel="noreferrer noopener" target="_blank">View GitHub Repo</a>
         </div>
 
         <div class="hero-metrics">
@@ -83,7 +83,7 @@
         <div class="double-bezel-outer">
           <div class="double-bezel-inner">
             <figure class="brand-image-wrapper">
-              <img src="./assets/hermes-gpt-branding.jpg" alt="Hermes GPT branding showing a stylized Greek wing design representing speed and intelligence with the Model Context Protocol network symbol">
+              <img src="./assets/randoku-sidecar-branding.jpg" alt="Randoku Sidecar branding showing a stylized Greek wing design representing speed and intelligence with the Model Context Protocol network symbol">
             </figure>
           </div>
         </div>
@@ -96,7 +96,7 @@
         <p class="eyebrow">System Architecture</p>
         <h2>Sidecar runtime integration.</h2>
         <p>
-          Hermes GPT acts as a lightweight sidecar. It runs locally alongside your Hermes Agent installation, calling tools dynamically and passing the structured outputs back to your LLM clients.
+          Randoku Sidecar acts as a lightweight sidecar. It runs locally alongside your Hermes Agent installation, calling tools dynamically and passing the structured outputs back to your LLM clients.
         </p>
       </div>
 
@@ -109,12 +109,12 @@
         <div class="timeline-step">
           <span class="step-num">02</span>
           <strong>SSE/Stdio Bridge</strong>
-          <p>The call is routed to Hermes GPT. Stdio for local apps like Cursor, or HTTP SSE through a secure Cloudflare tunnel for ChatGPT.</p>
+          <p>The call is routed to Randoku Sidecar. Stdio for local apps like Cursor, or HTTP SSE through a secure Cloudflare tunnel for ChatGPT.</p>
         </div>
         <div class="timeline-step">
           <span class="step-num">03</span>
           <strong>Dynamic Import</strong>
-          <p>Hermes GPT locates the local Hermes Agent directory, imports its core python tool code, and runs the action locally.</p>
+          <p>Randoku Sidecar locates the local Hermes Agent directory, imports its core python tool code, and runs the action locally.</p>
         </div>
         <div class="timeline-step">
           <span class="step-num">04</span>
@@ -147,7 +147,7 @@
                   <input type="checkbox" id="gate-terminal">
                   <span class="toggle-slider"></span>
                   <span class="toggle-label">
-                    <code>HERMES_GPT_ENABLE_TERMINAL=1</code>
+                    <code>RANDOKU_ENABLE_TERMINAL=1</code>
                     <small>Allow shell commands</small>
                   </span>
                 </label>
@@ -155,7 +155,7 @@
                   <input type="checkbox" id="gate-write">
                   <span class="toggle-slider"></span>
                   <span class="toggle-label">
-                    <code>HERMES_GPT_ENABLE_WRITE=1</code>
+                    <code>RANDOKU_ENABLE_WRITE=1</code>
                     <small>Allow file writes & patches</small>
                   </span>
                 </label>
@@ -163,7 +163,7 @@
                   <input type="checkbox" id="gate-memory">
                   <span class="toggle-slider"></span>
                   <span class="toggle-label">
-                    <code>HERMES_GPT_ENABLE_MEMORY_WRITE=1</code>
+                    <code>RANDOKU_ENABLE_MEMORY_WRITE=1</code>
                     <small>Allow memory modification</small>
                   </span>
                 </label>
@@ -171,7 +171,7 @@
                   <input type="checkbox" id="gate-session">
                   <span class="toggle-slider"></span>
                   <span class="toggle-label">
-                    <code>HERMES_GPT_ENABLE_SESSION_SEARCH=1</code>
+                    <code>RANDOKU_ENABLE_SESSION_SEARCH=1</code>
                     <small>Allow DB session scans</small>
                   </span>
                 </label>
@@ -220,7 +220,7 @@
               </div>
               <div class="pane-body chat-messages" id="chat-box">
                 <div class="chat-bubble bot-message initial-message">
-                  <p>Welcome! I'm connected to your local machine via the <strong>Hermes GPT</strong> MCP server. Select a tool above and run the simulation to see how I fetch data from your local environment.</p>
+                  <p>Welcome! I'm connected to your local machine via the <strong>Randoku Sidecar</strong> MCP server. Select a tool above and run the simulation to see how I fetch data from your local environment.</p>
                 </div>
               </div>
             </div>
@@ -235,7 +235,7 @@
               </div>
               <div class="pane-body server-logs" id="server-logs">
                 <div class="log-line system">[SYSTEM] Server started on 127.0.0.1:4750</div>
-                <div class="log-line system">[SYSTEM] Tunnel active: https://hermes-gpt-tunnel.trycloudflare.com/mcp</div>
+                <div class="log-line system">[SYSTEM] Tunnel active: https://randoku-sidecar-tunnel.trycloudflare.com/mcp</div>
                 <div class="log-line waiting">[WAITING] Waiting for incoming ChatGPT requests...</div>
               </div>
             </div>
@@ -251,7 +251,7 @@
         <p class="eyebrow">Capabilities</p>
         <h2>Built for secure, headless local automation.</h2>
         <p>
-          Hermes GPT is engineered with zero-trust local constraints. It stays out of your project directories and relies on loopback controls to protect your machine.
+          Randoku Sidecar is engineered with zero-trust local constraints. It stays out of your project directories and relies on loopback controls to protect your machine.
         </p>
       </div>
 
@@ -304,7 +304,7 @@
         <p class="eyebrow">How to setup</p>
         <h2>Get up and running in minutes.</h2>
         <p>
-          Hermes GPT runs in Python. Install dependencies, run the server, and add the config block to your editor or web clients.
+          Randoku Sidecar runs in Python. Install dependencies, run the server, and add the config block to your editor or web clients.
         </p>
       </div>
 
@@ -325,8 +325,8 @@
                 <button class="btn-copy-code" type="button" data-copy-target="setup-code">Copy</button>
               </div>
               <pre><code id="setup-code"># Clone the repository
-git clone https://github.com/asimons81/hermes-gpt.git
-cd hermes-gpt
+git clone https://github.com/asimons81/randoku-sidecar.git
+cd randoku-sidecar
 
 # Install required dependencies
 python -m pip install -r requirements.txt
@@ -349,9 +349,9 @@ python server.py</code></pre>
               </div>
               <pre><code id="desktop-code">{
   "mcpServers": {
-    "hermes-gpt": {
+    "randoku-sidecar": {
       "command": "python",
-      "args": ["C:\\Users\\asimo\\hermes-gpt\\server.py"]
+      "args": ["C:\\Users\\asimo\\randoku-sidecar\\server.py"]
     }
   }
 }</code></pre>
@@ -379,7 +379,7 @@ python server.py</code></pre>
             </div>
             <div class="tab-details">
               <h3>Connecting ChatGPT Web</h3>
-              <p>Because the ChatGPT web client runs remotely in the cloud, you must expose your local Hermes GPT server through a tunnel. Copy the generated <code>trycloudflare.com</code> URL and configure a Streaming HTTP connection in ChatGPT developer mode.</p>
+              <p>Because the ChatGPT web client runs remotely in the cloud, you must expose your local Randoku Sidecar server through a tunnel. Copy the generated <code>trycloudflare.com</code> URL and configure a Streaming HTTP connection in ChatGPT developer mode.</p>
             </div>
           </div>
         </div>
@@ -414,7 +414,7 @@ python server.py</code></pre>
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">HG</span>
           <span class="brand-copy">
-            <strong>Hermes GPT</strong>
+            <strong>Randoku Sidecar</strong>
             <small>local-dev sidecar</small>
           </span>
         </div>
@@ -423,7 +423,7 @@ python server.py</code></pre>
       <div class="footer-bottom">
         <p>&copy; <span id="footer-year">2026</span> Tony Simons. All rights reserved.</p>
         <div class="footer-links">
-          <a href="https://github.com/asimons81/hermes-gpt" rel="noreferrer noopener" target="_blank">GitHub</a>
+          <a href="https://github.com/asimons81/randoku-sidecar" rel="noreferrer noopener" target="_blank">GitHub</a>
           <a href="#top">Back to top</a>
         </div>
       </div>
