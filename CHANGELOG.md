@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- Added governed, provider-neutral semantic memory write-back (write-back phase
+  2): a new `hermes_memory_provider_writeback(tool, args, dry_run=True)` tool
+  that proxies an allowlisted subset of the configured memory provider's own
+  write tools (e.g. honcho conclusions) through the neutral `MemoryManager`
+  interface. Disabled by default — only provider-native tool names listed in the
+  `RANDOKU_MEMORY_WRITEBACK_TOOLS` env allowlist are permitted; a direct write
+  requires operator level `skills_config` + `apply_mode=direct` + `dry_run=false`
+  and emits an audit record (provider, tool, arg keys, args length/sha256, never
+  raw content). The provider's own success/failure is verified and surfaced
+  (never a silent success/orphan), the per-call manager is torn down in a
+  `finally` path, and a transient session-init error is retried. The sidecar
+  names no provider in code, so swapping providers is a config change. Live
+  verified end-to-end against honcho. See `docs/memory-writeback-audit.md` §14.
+
 - Fixed `hermes_gateway_status` to parse current Hermes gateway runtime files:
   JSON `gateway.pid`, `gateway_state.json["pid"]`, and
   `gateway_state.json["platforms"]`, while keeping compatibility with the legacy

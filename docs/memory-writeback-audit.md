@@ -505,3 +505,107 @@ facts** (the tool's "WHEN" criteria), not session logs (its "SKIP" list). The
 memory consolidation does **not** consult the external provider (honcho) —
 `memory_tool.py` has zero honcho references and routes overflow to
 `session_search` / skills, keeping the flat-file layer provider-neutral.
+
+---
+
+## 14. Phase 2 — provider write-back (shipped)
+
+The §4/§10 provider-proxy semantic path is now implemented and live-verified.
+**This section supersedes the "unimplemented / disabled by default" notes in §4,
+§10 ("Provider proxy remains phase 2+"), and the first Open item.**
+
+### What shipped
+
+A single governed MCP tool `hermes_memory_provider_writeback(tool, args,
+dry_run=True)` — thin wrapper in `server.py`, mechanics in `operator_memory.py`,
+registered next to `hermes_external_context_recall`:
+
+- **Provider-neutral (rule #1 / §3).** Dispatches through the neutral
+  `MemoryManager.handle_tool_call`; no provider is named in code. Which
+  provider-native tools may be proxied comes from a config allowlist (env
+  `RANDOKU_MEMORY_WRITEBACK_TOOLS`, comma-separated), **empty by default =
+  disabled** (§10). Swapping providers is a config change, not a code change.
+- **Executor, not extractor (§9).** The caller supplies the provider-native
+  tool name + native `args` verbatim; the sidecar maps nothing and decides
+  nothing.
+- **Governed (§10 / §11.2).** Mirrors v1 `hermes_memory`:
+  `OperatorPolicy.require_level("skills_config")` → `effective_dry_run` → plan +
+  audit → `require_mutation` → execute. dry-run is the default; a direct write
+  needs `apply_mode=direct` **and** `dry_run=false`.
+- **Honest result (§5).** The provider's own result JSON is parsed; an `error`
+  field — including the §5 silent-skip ("Failed to save conclusion.") and the
+  async-init transient — is surfaced as `success:false`, never folded into a
+  fake success / orphan.
+- **Clean lifecycle (§6).** The per-call `MemoryManager` is always torn down via
+  `shutdown_all()` (drain executor + join threads + flush) in a `finally` path.
+  A transient session-init error is retried with bounded backoff against the
+  **same** manager, not faked.
+- **No gateway impersonation (§6/§10).** No fabricated `gateway_session_key`;
+  reuses the same per-call build the recall path uses
+  (`_build_external_memory_manager`).
+- **Audited.** Every plan/write logs provider, provider tool, arg keys, and args
+  length + sha256 (never raw content), plus success/failure.
+
+### The four phase-2 decisions
+
+1. **Tool shape: transparent allowlisted proxy** (over a neutral semantic
+   wrapper) — provider-native names surface to the client; sidecar code names no
+   provider, so no provider→verb map lives in code.
+2. **Allowlist scope: create-only.** Only conclusion-create. *Delete excluded* —
+   honcho self-heals contradictory conclusions over time (correction = write a
+   new conclusion, not delete an old one), and delete is PII-only and needs a
+   `conclusion_id` the write path does not return; defer to a dedicated,
+   separately-gated tool if a real PII-removal need appears. *Granular reads
+   excluded* — out of scope for write-back; the aggregate
+   `hermes_external_context_recall` already serves synthesized recall.
+3. **Manager builder: reuse `_build_external_memory_manager`** + finally
+   shutdown — strongest read/write alignment (§2), one code path.
+4. **Peer: hardcode the provider default** — no `peer` param exposed; honcho's
+   default `user` resolves to peer `uncle` (§2).
+
+### Caveat: create + delete are fused in one provider tool
+
+honcho's `honcho_conclude` does both create and delete (`conclusion` vs
+`delete_id`). Because args pass through verbatim (transparent proxy),
+"create-only" and "default peer" are honored by **configuration + governance**
+(allowlist + the dry-run plan exposing `arg_keys` + the direct-mode gate +
+audit), **not** by code-level inspection of `delete_id` / `peer` — inspecting
+provider-specific argument names would encode honcho's schema into the sidecar
+and break neutrality (rule #1).
+
+### Live verification (2026-06-28)
+
+End-to-end against real honcho (workspace `hermes`, peer `uncle`,
+`http://127.0.0.1:8000`) via the actual governed code:
+
+- **dry-run** → plan (provider, tool, `arg_keys`, args len + sha256); no build,
+  no mutation.
+- **direct write** → honcho `POST /v3/.../conclusions "201 Created"`; the tool
+  returned `ok=True` with the saved result. Audit logged the dry-run and the
+  direct write with **matching sha256** (plan == write), content as len + hash
+  only.
+- **§5 confirmed empirically:** the session resolved to `randoku-sidecar` (cwd
+  basename, per-directory strategy), yet the conclusion is peer-scoped to
+  `uncle` — the session-key collision does not affect recall.
+- **§6 transient confirmed empirically:** bare reads with no retry returned
+  "Honcho session is still initializing; try again shortly."; the bounded retry
+  resolves it — the retry is load-bearing, not decorative.
+- **Recall is eventual.** The freshly written conclusion was *not* yet visible
+  via `prefetch_all` / `honcho_search` immediately after the `201`. honcho
+  incorporates a conclusion into the peer representation / search index
+  asynchronously server-side, so cross-entry recall of a brand-new conclusion
+  lags the authoritative `201` / `ok=True` persistence signal (consistent with
+  §6: the write is synchronous; consolidation is eventual). The read layer
+  itself is confirmed live — it returned uncle's existing observations.
+
+### Enablement (disabled by default)
+
+Because the MCP server runs as a long-lived stdio process the client spawns,
+adding the allowlist env (or the new tool itself) requires **relaunching
+`server.py`** — an already-running connection will not pick up new code or new
+env until the client re-spawns it. To enable for the current honcho setup, the
+launch env needs:
+
+- `RANDOKU_OPERATOR_ENABLED=1`, operator level ≥ `skills_config`,
+  `RANDOKU_OPERATOR_APPLY_MODE=direct` (for mutation)
+- `RANDOKU_MEMORY_WRITEBACK_TOOLS=honcho_conclude`

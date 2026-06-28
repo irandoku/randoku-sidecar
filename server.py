@@ -1062,6 +1062,27 @@ def hermes_external_context_recall(
     )
 
 
+def hermes_memory_provider_writeback(
+    tool: str,
+    args: dict[str, Any] | None = None,
+    dry_run: bool = True,
+) -> str:
+    """Allowlisted, governed proxy for the memory provider's own write tools.
+
+    Persists a caller-distilled write (e.g. a conclusion) into the configured
+    semantic memory layer via the neutral MemoryManager interface. Disabled by
+    default: only provider-native tool names listed in
+    RANDOKU_MEMORY_WRITEBACK_TOOLS are permitted, and writes require operator
+    level skills_config + apply_mode=direct + dry_run=false. The provider is
+    never named in code; ``args`` is forwarded verbatim.
+    """
+    return op_memory.hermes_memory_provider_writeback(
+        tool=tool,
+        args=args,
+        dry_run=dry_run,
+    )
+
+
 def hermes_codegraph_status(workdir: str, timeout: int = 60) -> str:
     return op_workspace.hermes_codegraph_status(workdir=workdir, timeout=timeout)
 
@@ -1235,6 +1256,7 @@ def register_tools(server: FastMCP) -> None:
     server.add_tool(hermes_workspace_apply_diff, meta=tool_meta())
     server.add_tool(hermes_workspace_run_test, meta=tool_meta())
     server.add_tool(hermes_external_context_recall, meta=tool_meta())
+    server.add_tool(hermes_memory_provider_writeback, meta=tool_meta())
     server.add_tool(hermes_codegraph_status, meta=tool_meta())
     for codegraph_tool_name in (
         "hermes_codegraph_search",

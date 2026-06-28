@@ -54,6 +54,8 @@ Deferred until the core tooling is stable.
 - [x] Initialize `MemoryStore` when calling Hermes memory internals. (`server.py`)
 - [x] Implement or clarify memory search behavior. (`hermes_memory(action="search")`)
 - [x] Keep memory write guarded by explicit policy. (OperatorPolicy: level `skills_config` + `apply_mode=direct` + per-call `dry_run`)
+- [x] Flat-file `MEMORY.md` / `USER.md` write-back governed under OperatorPolicy. (write-back v1; `hermes_memory` add/replace/remove)
+- [x] Provider-neutral semantic write-back via an allowlisted proxy of the configured provider's own write tools. (write-back phase 2; `hermes_memory_provider_writeback`, `RANDOKU_MEMORY_WRITEBACK_TOOLS`; `docs/memory-writeback-audit.md` §14)
 
 ## Non-goals for early versions
 

@@ -164,6 +164,25 @@ Terminal execution timeout is capped at 120 seconds even when enabled. For tiere
 workspace mutation tools — and default to a dry-run plan. There is no separate
 memory-write env flag.
 
+### Semantic (external provider) memory
+
+`hermes_memory` above is the flat-file `MEMORY.md` / `USER.md` layer. Separately,
+the sidecar can reach the configured external memory provider
+(`memory.provider`, e.g. honcho) through Hermes' neutral `MemoryManager` — the
+sidecar names no provider in code, so swapping providers is a config change.
+
+- `hermes_external_context_recall(query, ...)` — read-only auto-context prefetch
+  from the provider.
+- `hermes_memory_provider_writeback(tool, args, dry_run=True)` — governed,
+  allowlisted proxy that persists a caller-distilled write (e.g. a conclusion)
+  via the provider's own write tools. **Disabled by default**: only
+  provider-native tool names listed in `RANDOKU_MEMORY_WRITEBACK_TOOLS`
+  (comma-separated) are permitted, and a direct write requires operator level
+  `skills_config` + `apply_mode=direct` + `dry_run=false`, emitting an audit
+  record (provider, tool, arg keys, args length/sha256 — never raw content). The
+  sidecar executes the caller's explicit write only; it does not decide what is
+  worth remembering. See [`docs/memory-writeback-audit.md`](docs/memory-writeback-audit.md).
+
 ## Operator / Owner Mode
 
 Operator / Owner Mode is a tiered control plane. Levels are ordered; each level includes the capabilities of every level above it.
