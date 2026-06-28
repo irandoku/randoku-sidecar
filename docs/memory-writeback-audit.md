@@ -231,3 +231,201 @@ that do not depend on Hermes's runtime lifecycle.**
   confirmed against the Honcho SDK internals.
 - Whether per-call manager construction leaks threads in practice (vs. just in
   theory) was not load-tested.
+
+---
+
+## 9. Post-review clarification: sidecar is not a decision layer
+
+Follow-up review clarified an important architecture boundary:
+
+> `randoku-sidecar` is not an agent and must not become a hidden decision node.
+
+The decision layer is the **current MCP client model plus the human user**. The
+sidecar is an abstract MCP gateway that exposes Hermes capabilities which Hermes
+does not yet expose natively as MCP tools. It may enforce policy, validate tool
+call shape, execute an explicit operation, and write audit records; it must not
+decide what is worth remembering.
+
+The clean split is:
+
+```text
+User + MCP client model
+  = reasoning, judgement, memory-entry selection, and intent ownership
+
+randoku-sidecar
+  = MCP gateway, tool exposure, permission gates, dry-run/direct enforcement,
+    structured validation, transport adaptation, and audit
+
+Hermes Agent internals
+  = canonical capability implementation, MemoryStore semantics, provider
+    behavior, file formats, and runtime contracts
+```
+
+For memory write-back, this means:
+
+```text
+MCP client decides:
+  "this exact entry should be written to MEMORY.md or USER.md"
+
+sidecar enforces:
+  "is this explicit write call permitted, well-formed, dry-run/direct safe,
+   and auditable?"
+
+Hermes owns:
+  "how MemoryStore writes, deduplicates, enforces limits, scans content, and
+   later injects the snapshot into a Hermes session"
+```
+
+The sidecar should not:
+
+- distil conversation by itself
+- decide whether a turn is memorable
+- infer `target=memory` vs `target=user`
+- rewrite or compact memory autonomously
+- run background auto-sync
+- impersonate a Hermes gateway adapter lifecycle
+
+The sidecar may:
+
+- expose an explicit write-back tool
+- require explicit `content`, `target`, and `dry_run`
+- require operator and memory-write gates
+- call Hermes' existing `MemoryStore` / memory tool path
+- surface Hermes validation errors
+- record length/hash/provenance in audit
+
+In short:
+
+**MCP client owns intelligence. Hermes owns memory semantics. randoku-sidecar
+owns transport, tool exposure, policy enforcement, and audit.**
+
+---
+
+## 10. Proposed staged design
+
+### v1: explicit flat-file write-back
+
+First implementation should be a narrow executor for caller-provided memory
+entries, not an extractor:
+
+```python
+hermes_memory_writeback(
+    content: str,
+    target: str = "memory",  # "memory" | "user"
+    source: str = "sidecar",
+    reason: str = "",
+    dry_run: bool = True,
+) -> str
+```
+
+Semantics:
+
+- The MCP client supplies the already-distilled `content`.
+- The human / MCP client decides `target`.
+- Sidecar performs no semantic ranking or summarization.
+- Only `add` is supported in v1; no replace/remove/compact.
+- Dry-run returns the planned write, target, content length/hash, and rollback
+  hint without mutating.
+- Direct write requires explicit operator direct mode and the existing memory
+  write gate (`RANDOKU_ENABLE_MEMORY_WRITE=1`).
+- Audit records content length/hash, target, source, reason length/hash, dry-run
+  status, and success/failure, never raw memory text.
+
+Suggested policy gates:
+
+- `RANDOKU_OPERATOR_ENABLED=1`
+- operator level at least `skills_config` (or stricter if later desired)
+- `RANDOKU_OPERATOR_APPLY_MODE=direct` for mutation
+- tool call `dry_run=false` for mutation
+- `RANDOKU_ENABLE_MEMORY_WRITE=1`
+
+Suggested validation:
+
+- `target` must be `memory` or `user`
+- `content` must be a single explicit memory entry, not a transcript dump
+- length bounds should be conservative enough to respect Hermes' rolling memory
+  design
+- secret-looking content should be refused before calling Hermes
+- Hermes' own MemoryStore threat scan remains authoritative
+
+Naming guidance:
+
+- Prefer `hermes_memory_writeback` or `hermes_memory_add_entry`.
+- Avoid names that imply sidecar cognition, such as
+  `hermes_memory_distill`, `hermes_memory_extract`,
+  `hermes_memory_autosave`, or `hermes_memory_learn_from_conversation`.
+
+### v2: explicit write plan
+
+If one-entry write-back works well, add a caller-provided plan shape:
+
+```json
+{
+  "operations": [
+    {"action": "add", "target": "memory", "content": "..."}
+  ],
+  "dry_run": true
+}
+```
+
+The sidecar still does not generate the plan. It validates and executes the
+client-provided plan. Each operation should be independently auditable, and
+partial failure semantics must be explicit before direct mode is allowed.
+
+### v3: rolling maintenance / compaction as an explicit plan
+
+Rolling memory maintenance should not be automatic. If implemented, it should
+take a full client-provided plan with proposed additions/removals/replacements,
+return a dry-run diff first, and apply only after explicit direct-mode approval.
+
+This is the closest analogue to Hermes' own "memory gets more personalized over
+time" behavior, but the reasoning still belongs to the active MCP client model
+and the human. The sidecar remains only the executor of an explicit plan.
+
+### Provider proxy remains phase 2+
+
+Provider-native writes such as `honcho_conclude` should stay optional and
+disabled by default. If added later:
+
+- expose only an allowlisted subset of provider tools
+- do not dynamically expose arbitrary provider mutations as the default
+- check provider results for explicit failure
+- call `shutdown_all()` / provider cleanup in a `finally` path
+- audit provider name, tool name, argument hashes, and success/failure
+- never fabricate gateway lifecycle identity such as `gateway_session_key`
+
+Flat-file MemoryStore write-back remains the canonical v1 path because it is the
+least lifecycle-dependent channel and the most faithful to the sidecar's role as
+a capability bridge rather than a runtime participant.
+
+---
+
+## 11. Review notes
+
+Sections 9–10 were added by a follow-up review. Endorsed: §9 (the sidecar is not
+a decision layer) is the key governance boundary and correctly resolves the
+earlier "distil valuable things" ambiguity — distillation happens in the
+entry-point client model, the sidecar only executes an already-distilled write.
+§10's "executor not extractor" framing and naming guidance are sound, and the
+phase-2 provider-proxy tightening (allowlist subset, `finally` shutdown, argument
+hashing, no fabricated `gateway_session_key`) correctly narrows §4, which as
+written was too permissive about auto-exposing the full provider tool surface for
+writes.
+
+Two refinements not covered above:
+
+1. **Disambiguate `hermes_memory_writeback` from the existing
+   `hermes_memory(action="add")`.** Both write the flat-file `MemoryStore`, so a
+   new tool creates two write paths. Prefer **extending the existing tool** with
+   optional `dry_run` + `source`/`reason` provenance (today's `add` has no
+   dry-run — a real gap) rather than adding a parallel tool. If a separate tool
+   is kept, `hermes_memory add` should stop being the cross-entry write-back path
+   so there is exactly one.
+
+2. **The proposed operator-policy gating is a new coupling — decide it
+   deliberately.** §10 suggests requiring operator level `skills_config` +
+   `apply_mode=direct`. But today `hermes_memory` writes are gated by the
+   `RANDOKU_ENABLE_MEMORY_WRITE` env flag only and do **not** pass through
+   `OperatorPolicy`. Bringing write-back under the operator policy umbrella is
+   reasonable (more layered) but is a conscious architectural decision, not a bug
+   fix — it should be chosen explicitly, not introduced silently.
