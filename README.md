@@ -2,9 +2,9 @@
 
 ![Randoku Sidecar branding](assets/randoku-sidecar-branding.png)
 
-`randoku-sidecar` is a policy-first MCP sidecar for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It imports selected local Hermes Agent internals at runtime and exposes them to MCP clients (Claude, ChatGPT, Cursor, Codex, opencode) **without modifying Hermes Agent source files**.
+`randoku-sidecar` is a policy-first MCP sidecar for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It imports selected local Hermes Agent internals at runtime and exposes them to MCP clients (Claude, ChatGPT, Cursor, Codex, Gemini, opencode, custom apps) **without modifying Hermes Agent source files**.
 
-It is a **local-dev tool**: not a hosted service, not a fork of Hermes Agent itself, not a generic remote dev container, and not a replacement for any deployment tool. It runs on your machine, bound to loopback, and only reaches the network when you deliberately put a tunnel in front of it.
+It is a **local-dev tool**: not a hosted service, not a fork of Hermes Agent itself, not a generic remote dev container, and not a replacement for any deployment tool. It supports two practical MCP entry points: **stdio** for local clients that can launch a subprocess, and loopback **HTTP behind HTTPS/tunnel infrastructure** for hosted or remote clients that need a reachable URL.
 
 > **Origin & attribution.** `randoku-sidecar` began as a fork of [`hermes-gpt`](https://github.com/asimons81/hermes-gpt) by asimons81 (MIT) and has since diverged toward a policy-first, capability-based design. The original MIT license and copyright are preserved. See [`docs/ATTRIBUTION.md`](docs/ATTRIBUTION.md).
 
@@ -21,19 +21,20 @@ The guiding principle is **safe by default, mutation by explicit opt-in**:
 | Direct Operator | operator enabled + `apply_mode=direct` | writes allowed only when the tool call also sets `dry_run=false` |
 | Owner Mode | `level=owner` + exact owner ack | break-glass local owner tools; still denies secret paths |
 
-For the full Operator Mode guide, new-user quickstart, and tunnel safety model, see [`docs/operator-mode.md`](docs/operator-mode.md).
+For the full Operator Mode guide, new-user quickstart, and stdio/tunnel safety model, see [`docs/operator-mode.md`](docs/operator-mode.md).
 
 ## Security posture
 
 By default, `randoku-sidecar` is designed for a single trusted local machine:
 
+- Stdio is the default transport and does not open a listening socket.
 - HTTP binds to `127.0.0.1` by default; binding elsewhere in the `local-dev` profile prints a not-release-safe warning.
 - Tools advertise `noauth` only for local-dev MCP clients.
 - Write, patch, terminal execution, memory writes, and session search are disabled or hidden by default.
 - Remote/public exposure is not supported until a real authentication layer (OAuth or equivalent) is added.
 - Operator Mode is **not a sandbox**. Use OS-level isolation (container, VM) for untrusted input — the operator gates are defense-in-depth, not a security boundary.
 
-Do not expose this server publicly without authentication. A temporary tunnel is acceptable only for short local testing, and only when you understand that any enabled tool is reachable through that URL.
+Do not expose this server publicly without authentication. A temporary tunnel is acceptable only for hosted/remote-client testing, and only when you understand that any enabled tool is reachable through that URL.
 
 ## Prerequisites
 
@@ -54,9 +55,10 @@ All commands below use the repo-local interpreter `./venv/bin/python` so they ar
 
 ## Running
 
-### Stdio (local MCP clients)
+### Local stdio clients
 
-For MCP clients that launch a subprocess server:
+Use stdio when the MCP client runs locally and can launch a subprocess server.
+This includes local desktop apps, CLIs, IDEs, and custom local tools.
 
 ```bash
 ./venv/bin/python server.py
@@ -71,9 +73,27 @@ Example client configuration:
 }
 ```
 
-### Local HTTP
+Codex CLI example:
 
-HTTP mode uses FastMCP streamable HTTP:
+```bash
+codex mcp add randoku-sidecar \
+  --env HERMES_HOME="$HOME/.hermes" \
+  --env RANDOKU_OPERATOR_ENABLED=1 \
+  --env RANDOKU_OPERATOR_LEVEL=workspace \
+  --env RANDOKU_OPERATOR_APPLY_MODE=direct \
+  --env RANDOKU_OPERATOR_ALLOWED_PROFILES=default \
+  --env RANDOKU_OPERATOR_ALLOWED_PATHS="$HOME/Projects,$HOME/Downloads" \
+  --env RANDOKU_ENABLE_SESSION_SEARCH=1 \
+  -- /absolute/path/to/randoku-sidecar/venv/bin/python /absolute/path/to/randoku-sidecar/server.py
+```
+
+Do not use `start.sh` for stdio clients; that script is the loopback
+HTTP/tunnel launcher for hosted or remote clients.
+
+### Loopback HTTP
+
+HTTP mode is available for manual debugging, local HTTP clients, or as the
+loopback server behind an HTTPS tunnel. It uses FastMCP streamable HTTP:
 
 ```bash
 ./venv/bin/python server.py --http --host 127.0.0.1 --port 7677
@@ -85,17 +105,38 @@ Local endpoint:
 http://127.0.0.1:7677/mcp
 ```
 
-### ChatGPT local testing (tunnel)
+### Hosted or remote HTTPS clients
 
-ChatGPT developer mode expects a *remote* MCP endpoint and fetches it through its connector path, so a `http://127.0.0.1:...` URL will not reach your machine. For short local testing only, run the server on loopback and put a tunnel in front of it:
+Hosted or remote clients need a reachable HTTPS MCP endpoint. They cannot
+usually see your machine's `http://127.0.0.1:...`, and they usually cannot
+launch a local subprocess. For this path, run the server on loopback and put
+HTTPS/tunnel infrastructure in front of it. `start.sh` is this repository's
+local launcher for that pattern:
 
 ```bash
+./start.sh
+
+# Equivalent server command:
 ./venv/bin/python server.py --http --host 127.0.0.1 --port 4750
+
 # in another terminal:
 cloudflared tunnel --url http://127.0.0.1:4750 --http-host-header 127.0.0.1:4750
 ```
 
-In ChatGPT, configure Streaming HTTP, the `https://<your-trycloudflare-host>/mcp` URL, and No Authentication. If the client only shows the old read-only tool surface, reconnect or recreate the connector. Example setup scripts live under [`examples/`](examples/).
+`start.sh` defaults to `RANDOKU_OPERATOR_APPLY_MODE=dry_run`. During an
+intentional development or maintenance session, run it with a direct override:
+
+```bash
+RANDOKU_OPERATOR_APPLY_MODE=direct ./start.sh
+```
+
+Configure the hosted/remote client for Streaming HTTP at
+`https://<your-trycloudflare-host>/mcp`. Use No Authentication only for
+temporary private testing until a real auth layer is added. ChatGPT developer
+connectors are one example of this pattern; a custom hosted app or remote agent
+can use the same `/mcp` endpoint shape. If a client only shows the old read-only
+tool surface, reconnect or recreate the connector. Example setup scripts live
+under [`examples/`](examples/).
 
 ## Default tool gates
 

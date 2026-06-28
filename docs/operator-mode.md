@@ -1,6 +1,9 @@
 # Operator Mode for randoku-sidecar
 
-`randoku-sidecar` is a local MCP bridge for exposing selected Hermes Agent capabilities to trusted MCP clients like ChatGPT. It is meant to run on your machine, bound to loopback, with a tunnel in front of it only when you deliberately want remote access.
+`randoku-sidecar` is a local MCP bridge for exposing selected Hermes Agent capabilities to trusted MCP clients. In practice it has two supported MCP entry points:
+
+- stdio for local MCP clients that can launch `server.py` directly
+- loopback HTTP behind HTTPS/tunnel infrastructure for hosted or remote clients that need a reachable URL
 
 Operator Mode is the safer control plane inside `randoku-sidecar`. It exposes operator tools, but tool visibility does not mean mutation is allowed. Whether a call can change anything depends on:
 
@@ -9,13 +12,15 @@ Operator Mode is the safer control plane inside `randoku-sidecar`. It exposes op
 - the tool’s own `dry_run` argument
 - and, for owner tools, the exact break-glass acknowledgement
 
-Default posture should stay `dry_run` for always-on tunnel use.
+Default posture should stay `dry_run` for always-on hosted/remote use. Local stdio integrations may use a higher level when the client and machine are trusted, but direct mutation still requires the tool call to pass `dry_run=false`.
 
 ## New user quickstart
 
-1. Install and run `randoku-sidecar`.
-2. Start it in dry-run Operator Mode.
-3. Connect ChatGPT or another MCP client to the tunnel URL.
+1. Install `randoku-sidecar`.
+2. Pick the transport that matches the client:
+   - local client: configure stdio so the client launches `server.py`
+   - hosted/remote client: run loopback HTTP, then put HTTPS/tunnel infrastructure in front of it
+3. Start with dry-run Operator Mode unless you are doing a deliberate local maintenance session.
 4. Call:
    - `hermes_operator_policy`
    - `hermes_operator_status`
@@ -47,14 +52,14 @@ This is the safest starting point if you only want inspection.
 
 ### B. Dry-run Operator Mode
 
-This is the recommended always-on tunnel posture.
+This is the recommended always-on hosted/remote posture and a safe starting posture for local stdio clients.
 
 Behavior:
 
 - operator tools are available
 - mutating tools return plans or previews
 - nothing actually changes
-- safe default for ChatGPT connector use
+- safe default for hosted/remote client use and first-run local testing
 
 Example:
 
@@ -65,6 +70,12 @@ $env:RANDOKU_OPERATOR_LEVEL="skills_config"
 $env:RANDOKU_OPERATOR_APPLY_MODE="dry_run"
 $env:RANDOKU_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
 
+python server.py
+```
+
+For hosted/remote HTTPS mode, use the same environment variables with HTTP enabled:
+
+```powershell
 python server.py --http --host 127.0.0.1 --port 4750
 ```
 
@@ -89,7 +100,7 @@ $env:RANDOKU_OPERATOR_LEVEL="skills_config"
 $env:RANDOKU_OPERATOR_APPLY_MODE="direct"
 $env:RANDOKU_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
 
-python server.py --http --host 127.0.0.1 --port 4750
+python server.py
 ```
 
 A mutating tool still needs:
@@ -107,7 +118,7 @@ Break-glass only.
 Behavior:
 
 - owner tools are visible but refuse unless the exact owner acknowledgement is set
-- owner mode is not recommended for always-on tunnels
+- owner mode is not recommended for always-on use
 - owner mode still denies secret paths
 
 Example:
@@ -177,14 +188,50 @@ Direct cron move:
 
 The direct version only mutates if the server is already running with apply mode `direct`.
 
-## Recommended tunnel setup
+## Local stdio setup
+
+For local MCP clients such as desktop apps, CLIs, IDEs, and custom local tools,
+prefer stdio. It avoids a listening socket, avoids a tunnel, and lets the
+client manage the server process lifecycle directly.
+
+Client configuration shape:
+
+```json
+{
+  "command": "C:\\Users\\<YOU>\\randoku-sidecar\\.venv\\Scripts\\python.exe",
+  "args": ["C:\\Users\\<YOU>\\randoku-sidecar\\server.py"]
+}
+```
+
+Or point the client at a wrapper script that sets the environment first, as
+long as the script writes human-readable output to stderr and leaves stdout for
+MCP JSON-RPC.
+
+Codex CLI example:
+
+```bash
+codex mcp add randoku-sidecar \
+  --env HERMES_HOME="$HOME/.hermes" \
+  --env RANDOKU_OPERATOR_ENABLED=1 \
+  --env RANDOKU_OPERATOR_LEVEL=workspace \
+  --env RANDOKU_OPERATOR_APPLY_MODE=direct \
+  --env RANDOKU_OPERATOR_ALLOWED_PROFILES=default \
+  --env RANDOKU_OPERATOR_ALLOWED_PATHS="$HOME/Projects,$HOME/Downloads" \
+  --env RANDOKU_ENABLE_SESSION_SEARCH=1 \
+  -- /absolute/path/to/randoku-sidecar/venv/bin/python /absolute/path/to/randoku-sidecar/server.py
+```
+
+Do not use `start.sh` for stdio clients; it is the loopback HTTP/tunnel
+launcher for hosted or remote clients.
+
+## Hosted/remote HTTPS setup
 
 Keep the MCP server bound to `127.0.0.1`.
-Put the tunnel in front of loopback only.
-Keep always-on tunnel mode in `dry_run`.
+Put HTTPS/tunnel infrastructure in front of loopback only.
+Keep always-on hosted/remote mode in `dry_run`.
 Switch to `direct` only for a deliberate maintenance session.
 Switch back to `dry_run` afterward.
-Never enable Owner Mode on an always-on tunnel.
+Never enable Owner Mode on an always-on hosted/remote endpoint.
 
 Safe tunnel posture example:
 
@@ -196,6 +243,19 @@ $env:RANDOKU_OPERATOR_APPLY_MODE="dry_run"
 $env:RANDOKU_OPERATOR_ALLOWED_PROFILES="default,hermes-researcher,hermes-trt-manager,hermes-nexus-wiki"
 
 python server.py --http --host 127.0.0.1 --port 4750
+```
+
+On this repository, `start.sh` is the local loopback HTTP launcher for
+hosted/remote clients and keeps the server on `http://127.0.0.1:4750/mcp`.
+ChatGPT developer connectors are one example of this pattern; a custom hosted
+app or remote agent can use the same `/mcp` endpoint shape.
+
+`start.sh` defaults to `RANDOKU_OPERATOR_APPLY_MODE=dry_run`. For an
+intentional development or maintenance session, override it without editing the
+script:
+
+```bash
+RANDOKU_OPERATOR_APPLY_MODE=direct ./start.sh
 ```
 
 ## Profile root normalization
