@@ -465,3 +465,43 @@ What shipped (`server.py` `hermes_memory`):
 
 This is the flat-file canonical write-back path of §7. The honcho/provider-proxy
 semantic path (§4, §10 "phase 2+") remains unimplemented and disabled by default.
+
+---
+
+## 13. Live verification
+
+v1 was exercised end-to-end over a real MCP connection (2026-06-28).
+
+Setup change made for the test: the local Claude connector was switched from the
+public cloudflare tunnel (HTTPS, no-auth) to a **local stdio** server
+(`claude mcp add … -- <venv>/python <repo>/server.py`, user scope). This removes
+the public exposure for local use, and — because the app relaunches the repo's
+`server.py` — refreshed the client tool schema so `dry_run` became visible. The
+tunnel + `--http` is now only for transient ChatGPT testing.
+
+Round-trip observed:
+
+1. `dry_run=true` → returned a plan (target file `MEMORY.md`, content length +
+   sha256), wrote nothing.
+2. `dry_run=false` on an oversized entry → **`success: false`** with Hermes'
+   own rolling-memory limit message (`Memory at 2,085/2,200 chars … would
+   exceed`). The refusal was surfaced honestly — **no silent success, no orphan**
+   — which is exactly the property §5 and §11 insisted on. Hermes' `MemoryStore`
+   semantics are authoritative (§9), and v1 is a faithful executor of them.
+3. A shortened, durable entry → `success: true`, persisted (`2,200/2,200`).
+   `search` then returned it (`count: 1`, vs `count: 0` before the write),
+   confirming the cross-entry recall path.
+
+Postscript (validates §9 from the other side): in a later Hermes CLI session the
+main model consolidated `MEMORY.md` and pruned the test entry as a
+"completed-work log / session state." Its stated reasons map line-for-line to the
+memory tool's own schema description (`tools/memory_tool.py` — durable facts,
+priority `user > environment > procedures`, and the explicit SKIP list:
+"task progress, completed-work logs … use session_search"). The sidecar executed
+the write; the model + the tool's rulebook are the decision/curation layer.
+
+Practical lesson for write-back content: to survive curation, write **durable
+facts** (the tool's "WHEN" criteria), not session logs (its "SKIP" list). The
+memory consolidation does **not** consult the external provider (honcho) —
+`memory_tool.py` has zero honcho references and routes overflow to
+`session_search` / skills, keeping the flat-file layer provider-neutral.
