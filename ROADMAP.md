@@ -53,7 +53,7 @@ Deferred until the core tooling is stable.
 
 - [x] Initialize `MemoryStore` when calling Hermes memory internals. (`server.py`)
 - [x] Implement or clarify memory search behavior. (`hermes_memory(action="search")`)
-- [x] Keep memory write guarded by explicit policy. (`RANDOKU_ENABLE_MEMORY_WRITE`)
+- [x] Keep memory write guarded by explicit policy. (OperatorPolicy: level `skills_config` + `apply_mode=direct` + per-call `dry_run`)
 
 ## Non-goals for early versions
 

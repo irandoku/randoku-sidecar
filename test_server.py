@@ -16,16 +16,28 @@ import server
 
 GATE_ENVS = [
     server.ENABLE_WRITE_ENV,
-    server.ENABLE_MEMORY_WRITE_ENV,
     server.ENABLE_SESSION_SEARCH_ENV,
     server.ENABLE_TERMINAL_ENV,
     server.UNSAFE_REMOTE_ENV,
 ]
 
+OPERATOR_ENVS = [
+    server.op_policy.OPERATOR_ENABLED_ENV,
+    server.op_policy.OPERATOR_LEVEL_ENV,
+    server.op_policy.OPERATOR_APPLY_MODE_ENV,
+]
+
 
 def clear_gate_envs(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in GATE_ENVS:
+    for name in GATE_ENVS + OPERATOR_ENVS:
         monkeypatch.delenv(name, raising=False)
+
+
+def enable_memory_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enable governed memory writes: operator on, skills_config level, direct."""
+    monkeypatch.setenv(server.op_policy.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(server.op_policy.OPERATOR_LEVEL_ENV, "skills_config")
+    monkeypatch.setenv(server.op_policy.OPERATOR_APPLY_MODE_ENV, "direct")
 
 
 def tool_names(mcp_server) -> list[str]:
@@ -102,7 +114,7 @@ def test_env_gates_expose_high_risk_tools(monkeypatch):
     assert "hermes_session_search" in names
 
 
-def test_memory_write_actions_are_disabled_by_default(monkeypatch):
+def test_memory_write_refuses_without_operator_mode(monkeypatch):
     clear_gate_envs(monkeypatch)
     monkeypatch.setattr(server, "require_imports", lambda: None)
     monkeypatch.setattr(
@@ -111,8 +123,50 @@ def test_memory_write_actions_are_disabled_by_default(monkeypatch):
         SimpleNamespace(memory_tool=lambda **kwargs: "should not be called"),
     )
 
-    with pytest.raises(RuntimeError, match=server.ENABLE_MEMORY_WRITE_ENV):
-        server.hermes_memory(action="add", target="memory", content="x")
+    # Operator mode off → require_level refuses before any store load or write.
+    with pytest.raises(RuntimeError, match="Operator mode is disabled"):
+        server.hermes_memory(action="add", target="memory", content="x", dry_run=False)
+
+
+def test_memory_write_dry_run_returns_plan_without_writing(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    enable_memory_writes(monkeypatch)
+    monkeypatch.setattr(server, "require_imports", lambda: None)
+    monkeypatch.setattr(
+        server,
+        "memory_tool",
+        SimpleNamespace(memory_tool=lambda **kwargs: pytest.fail("must not write on dry-run")),
+    )
+
+    out = server.hermes_memory(action="add", target="user", content="uncle prefers terse logs", dry_run=True)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is True
+    assert parsed["plan"]["action"] == "add"
+    assert parsed["plan"]["target"] == "user"
+    assert parsed["plan"]["file"] == "USER.md"
+    assert parsed["plan"]["content_len"] == len("uncle prefers terse logs")
+    assert len(parsed["plan"]["content_sha256"]) == 64
+
+
+def test_memory_write_refuses_direct_without_apply_mode(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.op_policy.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(server.op_policy.OPERATOR_LEVEL_ENV, "skills_config")
+    # apply_mode left at default (dry_run): a dry_run=False call must refuse.
+    monkeypatch.setattr(server, "require_imports", lambda: None)
+    monkeypatch.setattr(
+        server,
+        "memory_tool",
+        SimpleNamespace(memory_tool=lambda **kwargs: pytest.fail("must not write")),
+    )
+
+    # effective_dry_run forces a plan when apply_mode != direct, so no write
+    # happens and require_mutation is never reached; the result is a safe plan.
+    out = server.hermes_memory(action="add", target="memory", content="x", dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is True
 
 
 def test_memory_search_remains_available(monkeypatch):
@@ -142,7 +196,7 @@ def test_memory_search_remains_available(monkeypatch):
 
 def test_memory_write_passes_loaded_store_when_enabled(monkeypatch):
     clear_gate_envs(monkeypatch)
-    monkeypatch.setenv(server.ENABLE_MEMORY_WRITE_ENV, "1")
+    enable_memory_writes(monkeypatch)
     captured = {}
 
     class FakeMemoryStore:
@@ -165,7 +219,7 @@ def test_memory_write_passes_loaded_store_when_enabled(monkeypatch):
         SimpleNamespace(MemoryStore=FakeMemoryStore, memory_tool=fake_memory_tool),
     )
 
-    assert server.hermes_memory(action="add", target="memory", content="x") == "memory write ok"
+    assert server.hermes_memory(action="add", target="memory", content="x", dry_run=False) == "memory write ok"
     assert captured["action"] == "add"
     assert captured["target"] == "memory"
     assert captured["content"] == "x"

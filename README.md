@@ -112,11 +112,16 @@ Opt-in capabilities (off by default):
 | Capability | Env var | Default |
 | --- | --- | --- |
 | Write file and patch tools | `RANDOKU_ENABLE_WRITE=1` | Hidden |
-| Memory `add`, `replace`, `remove` | `RANDOKU_ENABLE_MEMORY_WRITE=1` | Disabled |
 | Session search | `RANDOKU_ENABLE_SESSION_SEARCH=1` | Hidden |
 | Terminal command execution | `RANDOKU_ENABLE_TERMINAL=1` | Hidden |
 
 Terminal execution timeout is capped at 120 seconds even when enabled. For tiered, auditable mutation, prefer the **Operator / Owner Mode** tools below over the broad enable flags.
+
+`hermes_memory` search is always available. Its write actions (`add` / `replace` /
+`remove`) are governed by Operator Mode — level `skills_config` with
+`apply_mode=direct` and a per-call `dry_run=false`, the same tiered model as the
+workspace mutation tools — and default to a dry-run plan. There is no separate
+memory-write env flag.
 
 ## Operator / Owner Mode
 

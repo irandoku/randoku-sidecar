@@ -671,7 +671,6 @@ def test_tool_registration_includes_new_operator_tools(monkeypatch):
 
     for name in [
         "RANDOKU_ENABLE_WRITE",
-        "RANDOKU_ENABLE_MEMORY_WRITE",
         "RANDOKU_ENABLE_SESSION_SEARCH",
         "RANDOKU_ENABLE_TERMINAL",
         "RANDOKU_UNSAFE_REMOTE_NOAUTH",
@@ -734,7 +733,6 @@ def test_existing_read_tools_still_present(monkeypatch):
 
     for name in [
         "RANDOKU_ENABLE_WRITE",
-        "RANDOKU_ENABLE_MEMORY_WRITE",
         "RANDOKU_ENABLE_SESSION_SEARCH",
         "RANDOKU_ENABLE_TERMINAL",
         "RANDOKU_UNSAFE_REMOTE_NOAUTH",

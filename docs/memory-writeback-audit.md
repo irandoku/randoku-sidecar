@@ -429,3 +429,39 @@ Two refinements not covered above:
    `OperatorPolicy`. Bringing write-back under the operator policy umbrella is
    reasonable (more layered) but is a conscious architectural decision, not a bug
    fix — it should be chosen explicitly, not introduced silently.
+
+---
+
+## 12. v1 status — implemented
+
+The §11 decisions were taken and v1 shipped. **This section supersedes the
+`RANDOKU_ENABLE_MEMORY_WRITE` references in §2, §7, §10, and §11 — that flag has
+been removed.**
+
+Decisions taken:
+
+- **One tool, not two.** The existing `hermes_memory` was extended rather than
+  adding a parallel `hermes_memory_writeback` (§11 refinement 1).
+- **Governed, not env-gated.** Memory writes were migrated from the legacy
+  `RANDOKU_ENABLE_MEMORY_WRITE` flag to `OperatorPolicy` — reframed as paying down
+  the legacy-flag debt, not adding coupling (§11 refinement 2).
+
+What shipped (`server.py` `hermes_memory`):
+
+- `search` stays read-only and always available.
+- `add` / `replace` / `remove` now require operator level `skills_config`
+  (`require_level`) plus the mutation gate (`require_mutation`); the call takes
+  `dry_run: bool = True`.
+- `dry_run` (the default, or any time `apply_mode != direct`) returns a plan —
+  action, target, target file, content length + sha256 — and writes nothing.
+- Direct write requires `apply_mode=direct` **and** `dry_run=false`, then calls
+  Hermes' `MemoryStore` path; the store is loaded only when a write actually
+  happens (not for a refused call or a dry-run).
+- Every write/dry-run appends an `OperatorPolicy` audit record (length + hash,
+  never raw content).
+- The `RANDOKU_ENABLE_MEMORY_WRITE` env flag and constant were removed.
+- No `allowed_paths` check: memory writes target the fixed Hermes memory dir, not
+  a caller-supplied path.
+
+This is the flat-file canonical write-back path of §7. The honcho/provider-proxy
+semantic path (§4, §10 "phase 2+") remains unimplemented and disabled by default.

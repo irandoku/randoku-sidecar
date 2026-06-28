@@ -22,7 +22,6 @@ REMOTE_PROFILE = "remote"
 UNSAFE_REMOTE_ACK = "--i-understand-this-is-unsafe"
 UNSAFE_REMOTE_ENV = "RANDOKU_UNSAFE_REMOTE_NOAUTH"
 ENABLE_WRITE_ENV = "RANDOKU_ENABLE_WRITE"
-ENABLE_MEMORY_WRITE_ENV = "RANDOKU_ENABLE_MEMORY_WRITE"
 ENABLE_SESSION_SEARCH_ENV = "RANDOKU_ENABLE_SESSION_SEARCH"
 ENABLE_TERMINAL_ENV = "RANDOKU_ENABLE_TERMINAL"
 NOAUTH_META = {"securitySchemes": [{"type": "noauth"}]}
@@ -390,6 +389,7 @@ def hermes_memory(
     target: str = "memory",
     content: str | None = None,
     old_text: str | None = None,
+    dry_run: bool = True,
 ) -> str:
     try:
         require_imports()
@@ -397,18 +397,68 @@ def hermes_memory(
         normalized_target = (target or "memory").strip().lower()
         if normalized_action not in {"add", "replace", "remove", "search"}:
             raise RuntimeError("Unsupported memory action. Use add, replace, remove, or search.")
-        if normalized_action in {"add", "replace", "remove"} and not env_enabled(ENABLE_MEMORY_WRITE_ENV):
-            raise RuntimeError(f"Memory write actions are disabled. Set {ENABLE_MEMORY_WRITE_ENV}=1 to enable them.")
-        store = _load_memory_store()
         if normalized_action == "search":
-            return _search_memory_store(store, normalized_target, content)
-        return memory_tool.memory_tool(
+            return _search_memory_store(_load_memory_store(), normalized_target, content)
+
+        # Write actions (add/replace/remove) are governed by the same tiered
+        # OperatorPolicy as the workspace mutation tools — not a bespoke env
+        # flag. Memory writes target the fixed Hermes memory dir (MEMORY.md /
+        # USER.md), so there is no allowed_paths check; the gate is level +
+        # mutation, with dry-run as the default like every other mutating tool.
+        # The store is loaded only when a write actually happens (not for a
+        # refused call or a dry-run plan).
+        policy = op_policy.OperatorPolicy()
+        policy.require_level("skills_config")
+        memory_file = "USER.md" if normalized_target == "user" else "MEMORY.md"
+
+        if policy.effective_dry_run(dry_run):
+            record = op_policy.audit_record(
+                tool="hermes_memory",
+                level=policy.level,
+                apply_mode=policy.apply_mode,
+                dry_run=True,
+                success=True,
+                changed=False,
+                summary=f"dry-run memory {normalized_action} -> {memory_file}",
+                content=content,
+                extra={"action": normalized_action, "target": normalized_target, "file": memory_file},
+            )
+            return json.dumps(
+                {
+                    "success": True,
+                    "dry_run": True,
+                    "plan": {
+                        "action": normalized_action,
+                        "target": normalized_target,
+                        "file": memory_file,
+                        "content_len": record["content_len"],
+                        "content_sha256": record["content_sha256"],
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        policy.require_mutation(dry_run)
+        result = memory_tool.memory_tool(
             action=normalized_action,
             target=normalized_target,
             content=content,
             old_text=old_text,
-            store=store,
+            store=_load_memory_store(),
         )
+        op_policy.audit_record(
+            tool="hermes_memory",
+            level=policy.level,
+            apply_mode=policy.apply_mode,
+            dry_run=False,
+            success=True,
+            changed=True,
+            summary=f"memory {normalized_action} -> {memory_file}",
+            content=content,
+            extra={"action": normalized_action, "target": normalized_target, "file": memory_file},
+        )
+        return result
     except Exception as exc:
         raise clean_error("hermes_memory", exc) from exc
 

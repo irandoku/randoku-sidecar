@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Governed `hermes_memory` writes under OperatorPolicy (memory write-back v1).
+  `add` / `replace` / `remove` now require operator level `skills_config` plus
+  the mutation gate, take `dry_run` (default `True` → returns a plan with target
+  file and content length/sha256, writing nothing), and emit an audit record.
+  Direct write needs `apply_mode=direct` and `dry_run=false`. The legacy
+  `RANDOKU_ENABLE_MEMORY_WRITE` env flag was removed in favor of the tiered
+  operator model. `search` stays read-only and always available. No new tool was
+  added (the existing `hermes_memory` was extended); no `allowed_paths` check
+  applies since memory targets the fixed Hermes memory dir.
+
 - Established the project identity as `randoku-sidecar`, including README,
   package metadata, console script, environment variable names, example scripts,
   operator docs, site copy, and attribution notes. This preserves the original
