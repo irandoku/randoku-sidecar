@@ -138,6 +138,7 @@ Operator / Owner Mode is a tiered control plane. Levels are ordered; each level 
 - **Owner Mode needs a second acknowledgement.** `RANDOKU_OPERATOR_LEVEL=owner` is not enough; you must also set `RANDOKU_OWNER_ACK=I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE` exactly, or owner tools refuse.
 - **No secrets exposed.** Config `get` redacts secret-looking keys; `env` tools never return values; skill/cron prompts are surfaced only as `prompt_len` + `prompt_sha256`.
 - **No raw secret-path access.** The denied-path policy refuses `.env`, `auth.json`, `mcp-tokens/`, `.ssh/`, `.aws/`, `vault/`, and any secret-looking filename — even in Owner Mode.
+- **Fail-closed path scoping.** Workspace reads, writes, and the git status/diff tools all require `RANDOKU_OPERATOR_ALLOWED_PATHS` to be set and the target under it; an empty allow-list refuses uniformly. `git diff` additionally refuses a secret-like `pathspec`.
 - **No `shell=True` anywhere.** Every subprocess uses `shell=False` with a fixed argv.
 - **No destructive git/filesystem ops.** Workspace `run_test` allows only a conservative allowlist (pytest, ruff, mypy, npm test/lint, git status/diff). Owner `run_command` blocks catastrophic patterns (`rm -rf /`, `del /s`, `format`, `curl | bash`, `git push --force`, `git add -A/.`, anything touching `.env`/`vault`/`token`/`.ssh`).
 
@@ -149,7 +150,7 @@ Operator / Owner Mode is a tiered control plane. Levels are ordered; each level 
 | `RANDOKU_OPERATOR_LEVEL` | `read_only` | Operator level (see table above) |
 | `RANDOKU_OPERATOR_APPLY_MODE` | `dry_run` | `dry_run` returns plans; `direct` allows mutation |
 | `RANDOKU_OPERATOR_ALLOWED_PROFILES` | `default` | Comma-separated profile names, or `*` for all existing |
-| `RANDOKU_OPERATOR_ALLOWED_PATHS` | empty | Comma-separated workspace root paths; empty disables workspace writes |
+| `RANDOKU_OPERATOR_ALLOWED_PATHS` | empty | Comma-separated workspace root paths; empty disables workspace reads, writes, and git tools (fail-closed) |
 | `RANDOKU_OPERATOR_DENIED_PATHS` | built-in defaults | Extra denied paths (additions only; cannot weaken defaults) |
 | `RANDOKU_OWNER_ACK` | unset | Must equal `I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE` for owner tools |
 

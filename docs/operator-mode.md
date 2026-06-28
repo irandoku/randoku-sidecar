@@ -30,7 +30,11 @@ No environment variables are needed.
 
 Behavior:
 
-- status, read, list, and diff tools work
+- status, list, basic file read (`hermes_read_file`), skill view/diff, and
+  config get work with no configuration
+- the workspace-scoped read and git tools (`hermes_workspace_read`,
+  `hermes_git_status`, `hermes_git_diff`) are fail-closed: they refuse until
+  `RANDOKU_OPERATOR_ALLOWED_PATHS` names the directory you want to inspect
 - mutating tools refuse because Operator Mode is disabled
 
 Example:
@@ -251,6 +255,11 @@ The server still refuses or redacts access to:
 - secret-looking filenames
 
 That denial applies even in higher modes.
+
+Separately from secret denial, the workspace read/write and git status/diff
+tools are **fail-closed on scope**: they refuse unless
+`RANDOKU_OPERATOR_ALLOWED_PATHS` is set and the target path or git workdir is
+under it. `hermes_git_diff` also refuses a secret-like `pathspec`.
 
 ## Troubleshooting
 

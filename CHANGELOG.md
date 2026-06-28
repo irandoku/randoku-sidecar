@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Made the read-only operator tools fail-closed to match the write tools.
+  `hermes_workspace_read`, `hermes_git_status`, and `hermes_git_diff` now
+  require `RANDOKU_OPERATOR_ALLOWED_PATHS` to be set and the target path/workdir
+  under it, and apply the denied secret-path check (previously these were
+  fail-open: any non-denied path was reachable, and the git tools did not
+  check denied paths at all). `hermes_git_diff` additionally refuses a
+  secret-like `pathspec`. Read/write path gating is now a single shared
+  `OperatorPolicy` helper. This is a behavior change: operator read/git tools
+  require an allow-list; the basic `hermes_read_file` tool is unaffected.
+
 - Added test coverage for `hermes_workspace_apply_diff`, the core single-file
   unified-diff mutation capability: policy gates (allowed paths, denied secret
   paths, missing files, empty diffs), dry-run vs direct apply, strict-parser

@@ -63,11 +63,31 @@ def test_workspace_read_refuses_denied_path(workspace_tree, clean_env, audit_ove
     assert "denied" in parsed["error"].lower()
 
 
-def test_workspace_read_allows_normal_path(workspace_tree, clean_env, audit_override):
+def test_workspace_read_allows_normal_path(workspace_tree, clean_env, audit_override, monkeypatch):
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
     out = ows.hermes_workspace_read(path=str(workspace_tree / "README.md"))
     parsed = json.loads(out)
     assert parsed["success"] is True
     assert "# Project" in parsed["content"]
+
+
+def test_workspace_read_refuses_when_allowed_paths_empty(workspace_tree, clean_env, audit_override):
+    # Fail-closed: with no allowed_paths configured, even a non-secret read refuses.
+    out = ows.hermes_workspace_read(path=str(workspace_tree / "README.md"))
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "allowed_paths" in parsed["error"].lower() or "empty" in parsed["error"].lower()
+
+
+def test_workspace_read_refuses_path_outside_allowed_roots(workspace_tree, tmp_path, clean_env, audit_override, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "f.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    out = ows.hermes_workspace_read(path=str(other / "f.txt"))
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not under" in parsed["error"].lower()
 
 
 # --- workspace patch / write_file ----------------------------------------
@@ -403,19 +423,20 @@ def test_run_test_audit_records_status_extra(workspace_tree, clean_env, audit_ov
 # --- git status / diff ---------------------------------------------------
 
 
-def test_git_status_returns_porcelain(workspace_tree, clean_env, audit_override):
+def test_git_status_returns_porcelain(workspace_tree, clean_env, audit_override, monkeypatch):
     import subprocess
     subprocess.run(["git", "init"], cwd=str(workspace_tree), capture_output=True, check=False)
     subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=str(workspace_tree), capture_output=True, check=False)
     subprocess.run(["git", "config", "user.name", "t"], cwd=str(workspace_tree), capture_output=True, check=False)
     subprocess.run(["git", "add", "README.md"], cwd=str(workspace_tree), capture_output=True, check=False)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
     out = ows.hermes_git_status(workdir=str(workspace_tree))
     parsed = json.loads(out)
     if parsed["success"]:
         assert "README.md" in parsed["stdout"]
 
 
-def test_git_diff_returns_diff(workspace_tree, clean_env, audit_override):
+def test_git_diff_returns_diff(workspace_tree, clean_env, audit_override, monkeypatch):
     import subprocess
     subprocess.run(["git", "init"], cwd=str(workspace_tree), capture_output=True, check=False)
     subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=str(workspace_tree), capture_output=True, check=False)
@@ -423,10 +444,60 @@ def test_git_diff_returns_diff(workspace_tree, clean_env, audit_override):
     subprocess.run(["git", "add", "."], cwd=str(workspace_tree), capture_output=True, check=False)
     subprocess.run(["git", "commit", "-m", "init"], cwd=str(workspace_tree), capture_output=True, check=False)
     (workspace_tree / "README.md").write_text("# changed\n", encoding="utf-8")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
     out = ows.hermes_git_diff(workdir=str(workspace_tree), stat=True)
     parsed = json.loads(out)
     if parsed["success"]:
         assert "README.md" in parsed["stdout"]
+
+
+# --- git tools fail-closed posture ---------------------------------------
+
+
+def test_git_status_refuses_when_allowed_paths_empty(workspace_tree, clean_env, audit_override):
+    out = ows.hermes_git_status(workdir=str(workspace_tree))
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "allowed_paths" in parsed["error"].lower() or "empty" in parsed["error"].lower()
+
+
+def test_git_diff_refuses_when_allowed_paths_empty(workspace_tree, clean_env, audit_override):
+    out = ows.hermes_git_diff(workdir=str(workspace_tree), stat=True)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "allowed_paths" in parsed["error"].lower() or "empty" in parsed["error"].lower()
+
+
+def test_git_status_refuses_workdir_outside_allowed_roots(workspace_tree, tmp_path, clean_env, audit_override, monkeypatch):
+    other = tmp_path / "other-repo"
+    other.mkdir()
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    out = ows.hermes_git_status(workdir=str(other))
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not under" in parsed["error"].lower()
+
+
+def test_git_diff_refuses_denied_workdir(workspace_tree, clean_env, audit_override, monkeypatch):
+    # A workdir sitting inside a denied secret directory must refuse even when
+    # it is under an allowed root.
+    secret_workdir = workspace_tree / ".ssh" / "repo"
+    secret_workdir.mkdir(parents=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    out = ows.hermes_git_diff(workdir=str(secret_workdir))
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "denied" in parsed["error"].lower()
+
+
+def test_git_diff_refuses_secret_pathspec(workspace_tree, clean_env, audit_override, monkeypatch):
+    import subprocess
+    subprocess.run(["git", "init"], cwd=str(workspace_tree), capture_output=True, check=False)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    out = ows.hermes_git_diff(workdir=str(workspace_tree), pathspec=".env")
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "denied" in parsed["error"].lower()
 
 
 # --- gateway status / restart --------------------------------------------

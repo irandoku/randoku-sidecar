@@ -578,10 +578,16 @@ class OperatorPolicy:
                 f"({OPERATOR_ALLOWED_PROFILES_ENV})."
             )
 
-    def require_workspace_path(self, path: str | os.PathLike[str]) -> None:
-        """For workspace/owner file tools: path must be under an allowed
-        path AND not a denied path. Owner mode does NOT bypass the denied
-        check (no secret override in this PR)."""
+    def _require_allowed_path(self, path: str | os.PathLike[str], *, action: str) -> None:
+        """Shared fail-closed path gate used by both read and write workspace
+        tools: deny secret paths, require a configured allow-list, and require
+        the path under it. Owner mode does NOT bypass the denied check (no
+        secret override in this PR).
+
+        Keeping reads and writes on the same gate means an empty
+        ``allowed_paths`` refuses uniformly instead of silently allowing
+        read/git tools to reach anywhere on the machine.
+        """
         if is_denied_path(path):
             raise PermissionError(
                 f"Path {str(path)!r} is denied by the operator path safety policy "
@@ -589,7 +595,7 @@ class OperatorPolicy:
             )
         if not self.allowed_paths:
             raise PermissionError(
-                "Workspace writes are disabled because "
+                f"{action} are disabled because "
                 f"{OPERATOR_ALLOWED_PATHS_ENV} is empty. Set it to one or more "
                 "workspace root directories."
             )
@@ -598,6 +604,20 @@ class OperatorPolicy:
                 f"Path {str(path)!r} is not under any allowed path in "
                 f"{OPERATOR_ALLOWED_PATHS_ENV}."
             )
+
+    def require_workspace_path(self, path: str | os.PathLike[str]) -> None:
+        """For workspace/owner file *write* tools: path must be under an
+        allowed path AND not a denied path."""
+        self._require_allowed_path(path, action="Workspace writes")
+
+    def require_workspace_read_path(self, path: str | os.PathLike[str]) -> None:
+        """For workspace/git *read* tools: same fail-closed posture as writes.
+
+        A read or git workdir must be under a configured allowed path and must
+        not be a denied secret path. This removes the earlier asymmetry where
+        read/git tools were fail-open while writes were fail-closed.
+        """
+        self._require_allowed_path(path, action="Workspace reads")
 
     def to_summary(self) -> dict[str, Any]:
         """Return a JSON-safe summary. Never includes raw env values."""
