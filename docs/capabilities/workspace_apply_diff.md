@@ -120,3 +120,31 @@ Version 0.1 explicitly does not support:
 - file delete
 - chmod / mode changes
 - git index operations
+
+## Verification
+
+This contract is verified by `test_operator_workspace.py` (the
+`apply_diff` test group). Run:
+
+```bash
+pytest test_operator_workspace.py -k apply_diff -q
+```
+
+Each contract area maps to at least one test:
+
+- Authority / refusals — multi-file, rename, binary, and new-file-mode diffs
+  are rejected by the strict parser tests.
+- Preconditions — empty `allowed_paths`, paths outside allowed roots, denied
+  secret paths, missing files, empty diffs, and context mismatches each return
+  a refusal and leave the file unmodified.
+- Postconditions — direct apply writes the validated result atomically and
+  reports `hunk_count`, preview diff, backup policy, and rollback hint;
+  multi-hunk application is covered.
+- Dry-run semantics — dry-run returns the preview plan and writes neither the
+  target file nor a backup.
+- Rollback / backup policy — git worktrees skip `.bak` creation and return a
+  `git restore` hint (`backup_policy="git_worktree"`); non-git workspaces
+  create a `.bak` backup (`backup_policy="non_git_workspace"`).
+
+Tool registration is asserted in the operator tool-surface test, which lists
+`hermes_workspace_apply_diff` among the expected registered tools.

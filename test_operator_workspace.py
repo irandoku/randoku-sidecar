@@ -644,6 +644,7 @@ def test_tool_registration_includes_new_operator_tools(monkeypatch):
         "hermes_workspace_read",
         "hermes_workspace_patch",
         "hermes_workspace_write_file",
+        "hermes_workspace_apply_diff",
         "hermes_workspace_run_test",
         "hermes_git_status",
         "hermes_git_diff",
@@ -701,3 +702,223 @@ def test_operator_policy_tool_returns_default_safe_summary(monkeypatch):
     assert parsed["apply_mode"] == "dry_run"
     assert parsed["owner_mode_ready"] is False
     assert parsed["mutation_allowed"] is False
+
+
+# --- workspace apply_diff ------------------------------------------------
+#
+# Coverage for hermes_workspace_apply_diff, the core unified-diff mutation
+# capability. These exercise policy gates, dry-run vs direct, the strict diff
+# parser refusals, and the git vs non-git backup policy.
+
+
+def _enable_workspace(monkeypatch, root, *, direct):
+    """Enable operator at workspace level scoped to ``root``."""
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct" if direct else "dry_run")
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(root))
+
+
+def _diff_for(old: str, new: str, label: str) -> str:
+    """Build a valid single-file unified diff using the same machinery the
+    implementation uses for previews, guaranteeing format compatibility."""
+    return op.unified_diff(old, new, label=label)
+
+
+# --- policy / validation gates -------------------------------------------
+
+
+def test_apply_diff_refuses_when_allowed_paths_empty(workspace_tree, clean_env, audit_override, monkeypatch):
+    monkeypatch.setenv(op.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(op.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(op.OPERATOR_APPLY_MODE_ENV, "direct")
+    target = workspace_tree / "src" / "main.py"
+    diff = _diff_for("print('hello')\n", "print('world')\n", "main.py")
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "allowed_paths" in parsed["error"].lower() or "empty" in parsed["error"].lower()
+    assert target.read_text(encoding="utf-8") == "print('hello')\n"
+
+
+def test_apply_diff_refuses_path_outside_allowed_roots(workspace_tree, tmp_path, clean_env, audit_override, monkeypatch):
+    other = tmp_path / "other-ws"
+    other.mkdir()
+    (other / "file.py").write_text("a = 1\n", encoding="utf-8")
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    diff = _diff_for("a = 1\n", "a = 2\n", "file.py")
+    out = ows.hermes_workspace_apply_diff(path=str(other / "file.py"), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not under" in parsed["error"].lower()
+
+
+def test_apply_diff_refuses_denied_secret_path(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    secret = workspace_tree / ".env"
+    secret.write_text("SECRET=abc\n", encoding="utf-8")
+    diff = _diff_for("SECRET=abc\n", "SECRET=xyz\n", ".env")
+    out = ows.hermes_workspace_apply_diff(path=str(secret), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "denied" in parsed["error"].lower()
+    assert secret.read_text(encoding="utf-8") == "SECRET=abc\n"
+
+
+def test_apply_diff_refuses_empty_diff(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff="   ", dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "diff is required" in parsed["error"].lower()
+
+
+def test_apply_diff_refuses_missing_file(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "does_not_exist.py"
+    diff = _diff_for("a\n", "b\n", "does_not_exist.py")
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not found" in parsed["error"].lower()
+
+
+# --- dry-run vs direct ---------------------------------------------------
+
+
+def test_apply_diff_dry_run_previews_without_writing(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=False)
+    target = workspace_tree / "src" / "main.py"
+    original = target.read_text(encoding="utf-8")
+    diff = _diff_for(original, "print('world')\n", "main.py")
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=True)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is True
+    plan = parsed["plan"]
+    assert plan["would_apply"] is True
+    assert plan["hunk_count"] == 1
+    assert "+print('world')" in plan["diff"]
+    # File must be untouched and no backup files written on a dry run.
+    assert target.read_text(encoding="utf-8") == original
+    assert list((workspace_tree / "src").glob("main.py.bak.*")) == []
+
+
+def test_apply_diff_direct_writes_and_backs_up_non_git(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    diff = _diff_for("print('hello')\n", "print('world')\n", "main.py")
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is False
+    assert parsed["hunk_count"] == 1
+    assert parsed["backup_policy"] == "non_git_workspace"
+    assert parsed["backup"] is not None
+    assert target.read_text(encoding="utf-8") == "print('world')\n"
+    backups = list((workspace_tree / "src").glob("main.py.bak.*"))
+    assert len(backups) == 1
+
+
+def test_apply_diff_applies_multiple_hunks(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "multi.py"
+    # Two edits separated by more than the default 3-line diff context so
+    # difflib emits two distinct hunks rather than coalescing them into one.
+    lines = [f"line_{i} = {i}\n" for i in range(1, 13)]
+    original = "".join(lines)
+    target.write_text(original, encoding="utf-8")
+    lines[0] = "line_1 = 100\n"
+    lines[-1] = "line_12 = 1200\n"
+    new = "".join(lines)
+    diff = _diff_for(original, new, "multi.py")
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["hunk_count"] == 2
+    assert target.read_text(encoding="utf-8") == new
+
+
+# --- git worktree backup policy ------------------------------------------
+
+
+def test_apply_diff_git_worktree_skips_backup(workspace_tree, clean_env, audit_override, monkeypatch):
+    import subprocess
+    subprocess.run(["git", "init"], cwd=str(workspace_tree), capture_output=True, check=False)
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    diff = _diff_for("print('hello')\n", "print('world')\n", "main.py")
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["backup_policy"] == "git_worktree"
+    assert parsed["backup"] is None
+    assert "git restore" in parsed["rollback_hint"]
+    assert target.read_text(encoding="utf-8") == "print('world')\n"
+    # No .bak pollution inside a git worktree.
+    assert list((workspace_tree / "src").glob("main.py.bak.*")) == []
+
+
+# --- strict diff parser refusals -----------------------------------------
+
+
+def test_apply_diff_rejects_context_mismatch(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    # Removal line does not match the on-disk content.
+    diff = "@@ -1,1 +1,1 @@\n-print('goodbye')\n+print('world')\n"
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "mismatch" in parsed["error"].lower()
+    assert target.read_text(encoding="utf-8") == "print('hello')\n"
+
+
+def test_apply_diff_rejects_multi_file(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    diff = (
+        "diff --git a/main.py b/main.py\n"
+        "@@ -1,1 +1,1 @@\n-print('hello')\n+print('world')\n"
+        "diff --git a/other.py b/other.py\n"
+        "@@ -1,1 +1,1 @@\n-x\n+y\n"
+    )
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "multi-file" in parsed["error"].lower()
+
+
+def test_apply_diff_rejects_rename(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    diff = "diff --git a/main.py b/renamed.py\nrename from main.py\nrename to renamed.py\n"
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not supported" in parsed["error"].lower()
+
+
+def test_apply_diff_rejects_binary(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    diff = "Binary files a/main.py and b/main.py differ\n"
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not supported" in parsed["error"].lower()
+
+
+def test_apply_diff_rejects_new_file_mode(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_workspace(monkeypatch, workspace_tree, direct=True)
+    target = workspace_tree / "src" / "main.py"
+    diff = (
+        "diff --git a/main.py b/main.py\n"
+        "new file mode 100644\n"
+        "@@ -0,0 +1,1 @@\n+print('world')\n"
+    )
+    out = ows.hermes_workspace_apply_diff(path=str(target), diff=diff, dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not supported" in parsed["error"].lower()

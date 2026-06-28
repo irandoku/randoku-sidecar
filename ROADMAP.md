@@ -9,27 +9,27 @@ This roadmap tracks the transition from a local `hermes-gpt`-derived MCP sidecar
 - [x] Add architecture document.
 - [ ] Rename package / README references after the backup policy is fixed.
 - [ ] Preserve upstream MIT license and copyright notices.
-- [ ] Add changelog for Randoku-specific changes.
+- [x] Add changelog for Randoku-specific changes.
 
 ## Phase 1 — Policy cleanup
 
 Goal: make shared policy decisions reusable by every capability.
 
-- [ ] Add `should_backup(path)`.
-- [ ] Detect git worktrees.
-- [ ] Skip `.bak` creation inside git repositories by default.
-- [ ] Keep `.bak` backups for non-git workspaces such as notes and downloads.
-- [ ] Include backup policy in tool responses and audit records.
+- [x] Add `should_backup(path)`. (`_should_backup_file` in `operator_workspace.py`)
+- [x] Detect git worktrees. (`_is_git_worktree`)
+- [x] Skip `.bak` creation inside git repositories by default.
+- [x] Keep `.bak` backups for non-git workspaces such as notes and downloads.
+- [x] Include backup policy in tool responses and audit records.
 
 ## Phase 2 — Patch capability
 
 Goal: make code changes reviewable and robust.
 
-- [ ] Add `hermes_workspace_apply_diff`.
-- [ ] Support strict single-file unified diffs.
-- [ ] Reject fuzzy matches, renames, deletions, binary diffs, and multi-file diffs in v0.1.
-- [ ] Dry-run should return the resulting preview diff.
-- [ ] Direct apply should use shared policy, backup policy, atomic write, and audit.
+- [x] Add `hermes_workspace_apply_diff`. (`operator_workspace.py`)
+- [x] Support strict single-file unified diffs.
+- [x] Reject fuzzy matches, renames, deletions, binary diffs, and multi-file diffs in v0.1.
+- [x] Dry-run should return the resulting preview diff.
+- [x] Direct apply should use shared policy, backup policy, atomic write, and audit.
 
 ## Phase 3 — Test capability
 

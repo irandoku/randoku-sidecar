@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+- Added test coverage for `hermes_workspace_apply_diff`, the core single-file
+  unified-diff mutation capability: policy gates (allowed paths, denied secret
+  paths, missing files, empty diffs), dry-run vs direct apply, strict-parser
+  refusals (multi-file, rename, binary, new-file-mode, context mismatch),
+  multi-hunk application, and the git vs non-git backup policy.
+- Completed the operator tool-surface test to assert `hermes_workspace_apply_diff`
+  is registered.
+- Updated `ROADMAP.md` to mark Phase 1 (backup policy) and Phase 2 (patch
+  capability) complete, matching the shipped and now-tested implementation.
+- Added a `Verification` section to the `workspace_apply_diff` capability
+  contract mapping each clause to its covering tests.
+
 ## 0.2.0 - 2026-06-21
 
 - Added tiered Operator / Owner Mode tooling for trusted MCP clients.
