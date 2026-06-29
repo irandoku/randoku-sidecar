@@ -50,6 +50,10 @@ def _json_error(message: str, **extra: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _json_ok(**fields: Any) -> str:
+    return json.dumps({"success": True, **fields}, ensure_ascii=False, indent=2)
+
+
 def _load_config() -> dict[str, Any]:
     from hermes_cli.config import load_config
 
@@ -144,22 +148,17 @@ def hermes_external_context_recall(
             profile=profile,
         )
         if manager is None:
-            return json.dumps(
-                {
-                    "success": True,
-                    "provider": provider_name,
-                    "provider_loaded": False,
-                    "provider_available": False,
-                    "session_id": session_id,
-                    "platform": platform,
-                    "effective_platform": effective_platform,
-                    "query": clean_query,
-                    "content": "",
-                    "empty": True,
-                    "note": note,
-                },
-                ensure_ascii=False,
-                indent=2,
+            return _json_ok(
+                provider=provider_name,
+                provider_loaded=False,
+                provider_available=False,
+                session_id=session_id,
+                platform=platform,
+                effective_platform=effective_platform,
+                query=clean_query,
+                content="",
+                empty=True,
+                note=note,
             )
 
         try:
@@ -175,21 +174,16 @@ def hermes_external_context_recall(
             except Exception:
                 pass
 
-        return json.dumps(
-            {
-                "success": True,
-                "provider": provider_name,
-                "provider_loaded": True,
-                "provider_available": True,
-                "session_id": session_id,
-                "platform": platform,
-                "effective_platform": effective_platform,
-                "query": clean_query,
-                "content": content,
-                "empty": not bool(content and content.strip()),
-            },
-            ensure_ascii=False,
-            indent=2,
+        return _json_ok(
+            provider=provider_name,
+            provider_loaded=True,
+            provider_available=True,
+            session_id=session_id,
+            platform=platform,
+            effective_platform=effective_platform,
+            query=clean_query,
+            content=content,
+            empty=not bool(content and content.strip()),
         )
     except Exception as exc:
         return _json_error(
@@ -316,20 +310,15 @@ def hermes_memory_provider_writeback(
                     "arg_keys": ",".join(arg_keys),
                 },
             )
-            return json.dumps(
-                {
-                    "success": True,
-                    "dry_run": True,
-                    "plan": {
-                        "provider": provider_name,
-                        "tool": clean_tool,
-                        "arg_keys": arg_keys,
-                        "args_len": record["content_len"],
-                        "args_sha256": record["content_sha256"],
-                    },
+            return _json_ok(
+                dry_run=True,
+                plan={
+                    "provider": provider_name,
+                    "tool": clean_tool,
+                    "arg_keys": arg_keys,
+                    "args_len": record["content_len"],
+                    "args_sha256": record["content_sha256"],
                 },
-                ensure_ascii=False,
-                indent=2,
             )
 
         policy.require_mutation(dry_run)
@@ -377,26 +366,16 @@ def hermes_memory_provider_writeback(
         )
 
         if not ok:
-            return json.dumps(
-                {
-                    "success": False,
-                    "provider": provider_name,
-                    "tool": clean_tool,
-                    "error": message,
-                    "retryable": transient,
-                },
-                ensure_ascii=False,
-                indent=2,
+            return _json_error(
+                message,
+                provider=provider_name,
+                tool=clean_tool,
+                retryable=transient,
             )
-        return json.dumps(
-            {
-                "success": True,
-                "provider": provider_name,
-                "tool": clean_tool,
-                "result": message,
-            },
-            ensure_ascii=False,
-            indent=2,
+        return _json_ok(
+            provider=provider_name,
+            tool=clean_tool,
+            result=message,
         )
     except Exception as exc:
         return _json_error(str(exc), tool=clean_tool)
