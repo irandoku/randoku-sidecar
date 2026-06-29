@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Fixed `hermes_external_context_recall` always returning empty `content` even
+  when the configured provider had the data. The provider's prefetch is
+  asynchronous: a freshly built per-call manager fires the background fetch and
+  returns the currently-cached (empty) result, and the tool tore the manager
+  down before that fetch could land. The tool now polls the same warm manager
+  with a small bounded backoff (up to 4 attempts ~1.5s apart) until content
+  appears or the budget is exhausted, then tears the manager down in a `finally`
+  path. The wait is generic async-prefetch draining — no provider is named in
+  code.
+
 - Added governed, provider-neutral semantic memory write-back (write-back phase
   2): a new `hermes_memory_provider_writeback(tool, args, dry_run=True)` tool
   that proxies an allowlisted subset of the configured memory provider's own

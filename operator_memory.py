@@ -31,6 +31,18 @@ _TRANSIENT_HINTS = ("initializing", "try again", "temporarily", "not ready", "no
 _WRITE_MAX_ATTEMPTS = 4
 _WRITE_RETRY_SLEEP_S = 0.75
 
+# A freshly built per-call manager's prefetch is ASYNCHRONOUS (audit §6): the
+# first ``prefetch_all`` fires the provider's background fetch and returns the
+# currently-cached (empty) result; the landed content only surfaces on a later
+# call once that background work completes. Because this tool builds a fresh
+# manager, prefetches once, and tears it down immediately, a single call would
+# always report empty even when the provider demonstrably has the data. So we
+# poll the SAME warm manager with a small bounded backoff until content lands
+# or the budget is exhausted. This is generic async-prefetch draining, not
+# provider-specific code (rule #1).
+_RECALL_MAX_ATTEMPTS = 4
+_RECALL_RETRY_SLEEP_S = 1.5
+
 
 def _json_error(message: str, **extra: Any) -> str:
     payload = {"success": False, "error": message}
@@ -150,7 +162,19 @@ def hermes_external_context_recall(
                 indent=2,
             )
 
-        content = manager.prefetch_all(clean_query, session_id=session_id)
+        try:
+            content = manager.prefetch_all(clean_query, session_id=session_id)
+            attempt = 1
+            while (not (content and content.strip())) and attempt < _RECALL_MAX_ATTEMPTS:
+                time.sleep(_RECALL_RETRY_SLEEP_S)
+                content = manager.prefetch_all(clean_query, session_id=session_id)
+                attempt += 1
+        finally:
+            try:
+                manager.shutdown_all()
+            except Exception:
+                pass
+
         return json.dumps(
             {
                 "success": True,

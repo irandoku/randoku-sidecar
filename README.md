@@ -172,7 +172,9 @@ the sidecar can reach the configured external memory provider
 sidecar names no provider in code, so swapping providers is a config change.
 
 - `hermes_external_context_recall(query, ...)` — read-only auto-context prefetch
-  from the provider.
+  from the provider. The provider's prefetch is asynchronous, so the tool polls
+  the warm manager with a short bounded backoff (a few attempts over a few
+  seconds) to let the background fetch land before returning.
 - `hermes_memory_provider_writeback(tool, args, dry_run=True)` — governed,
   allowlisted proxy that persists a caller-distilled write (e.g. a conclusion)
   via the provider's own write tools. **Disabled by default**: only

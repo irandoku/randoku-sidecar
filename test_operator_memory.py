@@ -8,10 +8,16 @@ import operator_policy as op
 
 
 class FakeManager:
-    def __init__(self):
+    def __init__(self, results=None):
         self.added = []
         self.initialized = None
         self.prefetched = None
+        # ``results`` lets a test simulate the provider's ASYNCHRONOUS prefetch:
+        # a sequence of per-call return values (e.g. empty until the background
+        # fetch lands). Default: content on the first call.
+        self._results = list(results) if results is not None else ["external context"]
+        self.prefetch_calls = 0
+        self.shutdown_calls = 0
 
     @property
     def providers(self):
@@ -25,7 +31,12 @@ class FakeManager:
 
     def prefetch_all(self, query, *, session_id=""):
         self.prefetched = {"query": query, "session_id": session_id}
-        return "external context"
+        idx = min(self.prefetch_calls, len(self._results) - 1)
+        self.prefetch_calls += 1
+        return self._results[idx]
+
+    def shutdown_all(self):
+        self.shutdown_calls += 1
 
 
 def test_external_context_recall_requires_query():
@@ -95,6 +106,62 @@ def test_external_context_recall_prefetches_with_initialized_manager(monkeypatch
     assert manager.initialized["platform"] == "chatgpt"
     assert manager.initialized["agent_context"] == "sidecar"
     assert manager.prefetched == {"query": "memory bug", "session_id": "s1"}
+    assert manager.shutdown_calls == 1
+
+
+def test_external_context_recall_waits_for_async_prefetch(monkeypatch):
+    # The provider's prefetch is asynchronous: the first call returns empty
+    # while the background fetch is in flight; later calls return the landed
+    # content. The tool must poll the warm manager until content appears.
+    manager = FakeManager(results=["", "", "landed context"])
+
+    def fake_build(*, session_id="", platform="cli", profile="default", **kwargs):
+        manager.initialize_all(
+            session_id=session_id,
+            platform=platform,
+            agent_context="sidecar",
+            agent_identity=profile,
+            agent_workspace="hermes",
+        )
+        return manager, "honcho", ""
+
+    monkeypatch.setattr(om, "_build_external_memory_manager", fake_build)
+    monkeypatch.setattr(om.time, "sleep", lambda _s: None)
+
+    parsed = json.loads(om.hermes_external_context_recall("memory bug"))
+
+    assert parsed["success"] is True
+    assert parsed["content"] == "landed context"
+    assert parsed["empty"] is False
+    assert manager.prefetch_calls == 3  # polled until non-empty
+    assert manager.shutdown_calls == 1
+
+
+def test_external_context_recall_gives_up_after_budget(monkeypatch):
+    # If the background fetch never lands within the budget, the tool reports
+    # empty rather than hanging — bounded by _RECALL_MAX_ATTEMPTS.
+    manager = FakeManager(results=[""])
+
+    def fake_build(*, session_id="", platform="cli", profile="default", **kwargs):
+        manager.initialize_all(
+            session_id=session_id,
+            platform=platform,
+            agent_context="sidecar",
+            agent_identity=profile,
+            agent_workspace="hermes",
+        )
+        return manager, "honcho", ""
+
+    monkeypatch.setattr(om, "_build_external_memory_manager", fake_build)
+    monkeypatch.setattr(om.time, "sleep", lambda _s: None)
+
+    parsed = json.loads(om.hermes_external_context_recall("memory bug"))
+
+    assert parsed["success"] is True
+    assert parsed["content"] == ""
+    assert parsed["empty"] is True
+    assert manager.prefetch_calls == om._RECALL_MAX_ATTEMPTS
+    assert manager.shutdown_calls == 1
 
 
 def test_external_context_recall_defaults_to_cli_platform(monkeypatch):
