@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Docs: clarified the Operator/Owner Mode level table wording. The old phrasing
+  ("each level includes the capabilities of every level above it") was easy to
+  misread; the README now states the levels are a strict ascending ladder
+  (`read_only` < … < `owner`), each level is a superset of the weaker ones, and
+  a level check is a *minimum threshold* — so e.g. `workspace` satisfies a
+  `skills_config` requirement (write-back works at `workspace` too). No behavior
+  change.
+
 - Fixed `hermes_external_context_recall` always returning empty `content` even
   when the configured provider had the data. The provider's prefetch is
   asynchronous: a freshly built per-call manager fires the background fetch and

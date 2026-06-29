@@ -187,7 +187,7 @@ sidecar names no provider in code, so swapping providers is a config change.
 
 ## Operator / Owner Mode
 
-Operator / Owner Mode is a tiered control plane. Levels are ordered; each level includes the capabilities of every level above it.
+Operator / Owner Mode is a tiered control plane. The levels form a strict ascending ladder — `read_only` < `cron` < `skills` < `skills_config` < `workspace` < `owner` — and each level is a **superset** of every level below it: it grants its own capabilities plus all those of the weaker levels (the `+` rows accumulate downward in the table). A level check is a **minimum threshold**, not an exact match, so a higher level also satisfies any requirement for a lower one — e.g. `workspace` satisfies a `skills_config` requirement, so write-back (which requires at least `skills_config`) works at `workspace` too.
 
 | Level | Capabilities |
 | --- | --- |
