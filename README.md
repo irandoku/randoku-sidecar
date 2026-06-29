@@ -220,6 +220,7 @@ Operator / Owner Mode is a tiered control plane. The levels form a strict ascend
 | `RANDOKU_OPERATOR_ALLOWED_PATHS` | empty | Comma-separated workspace root paths; empty disables workspace reads, writes, and git tools (fail-closed) |
 | `RANDOKU_OPERATOR_DENIED_PATHS` | built-in defaults | Extra denied paths (additions only; cannot weaken defaults) |
 | `RANDOKU_OWNER_ACK` | unset | Must equal `I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE` for owner tools |
+| `RANDOKU_MEMORY_WRITEBACK_TOOLS` | empty (disabled) | Comma-separated provider-native tool names permitted for memory write-back; empty disables it. `start.sh` defaults this to `honcho_conclude` |
 
 ### Examples
 

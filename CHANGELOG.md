@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- `start.sh` now exports `RANDOKU_MEMORY_WRITEBACK_TOOLS` (defaulting to
+  `honcho_conclude`, overridable — set it empty to disable). Previously the
+  loopback/tunnel HTTP server launched by `start.sh` never received the
+  allowlist, so `hermes_memory_provider_writeback` reported an empty allowlist
+  and refused every write even though the same env was set for the stdio MCP
+  server. The launch banner now prints the active write-back tools, and the
+  env-var table + `start.sh` header document the variable. No code change.
+
 - Docs: clarified the Operator/Owner Mode level table wording. The old phrasing
   ("each level includes the capabilities of every level above it") was easy to
   misread; the README now states the levels are a strict ascending ladder
