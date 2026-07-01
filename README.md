@@ -174,7 +174,19 @@ sidecar names no provider in code, so swapping providers is a config change.
 - `hermes_external_context_recall(query, ...)` — read-only auto-context prefetch
   from the provider. The provider's prefetch is asynchronous, so the tool polls
   the warm manager with a short bounded backoff (a few attempts over a few
-  seconds) to let the background fetch land before returning.
+  seconds) to let the background fetch land before returning. This is a
+  **cached, cadence-gated** snapshot meant to prime a system prompt (peer
+  representation/card plus a periodically-refreshed dialectic answer) — not a
+  precise topic search. A fresh per-call manager can even replay the
+  provider's own generic startup prewarm instead of answering `query`.
+- `hermes_memory_provider_read(tool, args, ...)` — allowlisted, provider-neutral
+  proxy for a **precise, uncached** lookup via the provider's own read tool
+  (e.g. Honcho's `honcho_search`), bypassing `prefetch_all`'s cache/cadence
+  entirely so the result reflects the query just asked. **Disabled by
+  default**: only provider-native tool names listed in
+  `RANDOKU_MEMORY_READ_TOOLS` (comma-separated) are permitted; `start.sh`
+  defaults this to `honcho_search`. Don't allowlist a tool that also accepts a
+  write argument (e.g. Honcho's `honcho_profile` with `card`) unless intended.
 - `hermes_memory_provider_writeback(tool, args, dry_run=True)` — governed,
   allowlisted proxy that persists a caller-distilled write (e.g. a conclusion)
   via the provider's own write tools. **Disabled by default**: only
@@ -221,6 +233,7 @@ Operator / Owner Mode is a tiered control plane. The levels form a strict ascend
 | `RANDOKU_OPERATOR_DENIED_PATHS` | built-in defaults | Extra denied paths (additions only; cannot weaken defaults) |
 | `RANDOKU_OWNER_ACK` | unset | Must equal `I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE` for owner tools |
 | `RANDOKU_MEMORY_WRITEBACK_TOOLS` | empty (disabled) | Comma-separated provider-native tool names permitted for memory write-back; empty disables it. `start.sh` defaults this to `honcho_conclude` |
+| `RANDOKU_MEMORY_READ_TOOLS` | empty (disabled) | Comma-separated provider-native tool names permitted for `hermes_memory_provider_read`; empty disables it. `start.sh` defaults this to `honcho_search` |
 
 ### Examples
 

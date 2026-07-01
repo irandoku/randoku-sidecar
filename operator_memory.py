@@ -22,6 +22,13 @@ import operator_policy as op_policy
 # keeps the *code* provider-neutral; swapping providers is a config change.
 WRITEBACK_ALLOWLIST_ENV = "RANDOKU_MEMORY_WRITEBACK_TOOLS"
 
+# Read-side counterpart of the above (audit: recall/search parity gap). A
+# provider's own query tools (e.g. Honcho's honcho_search) are precise and
+# uncached, unlike prefetch_all()'s auto-context injection. Same fail-closed
+# default and same "allowlist is the only scope decision" stance as the
+# write-back allowlist (rule #1) — just for read-only provider tool names.
+READ_ALLOWLIST_ENV = "RANDOKU_MEMORY_READ_TOOLS"
+
 # A freshly built per-call manager may still be initializing its provider
 # session in a background thread (audit §6), so the first write can come back
 # as a transient readiness error. These are GENERIC readiness substrings, not
@@ -131,7 +138,18 @@ def hermes_external_context_recall(
     profile: str = "default",
     platform: str = "cli",
 ) -> str:
-    """Read-only Hermes MemoryManager external auto-context prefetch."""
+    """Read-only Hermes MemoryManager external auto-context prefetch.
+
+    This drives ``MemoryManager.prefetch_all()`` — a cached, cadence-gated
+    auto-context injector designed to prime a system prompt (peer
+    representation/card plus a periodically-refreshed dialectic answer), not
+    a point query. A fresh per-call manager re-runs the provider's own
+    startup prewarm (e.g. Honcho's generic "summarize what you know about
+    this user"), so a topic-specific query can lose out to that cached
+    generic content instead of returning something specific to ``query``.
+    For a precise, uncached lookup use ``hermes_memory_provider_read`` with
+    the provider's own search tool (e.g. Honcho's ``honcho_search``).
+    """
     clean_query = (query or "").strip()
     effective_platform = platform or "cli"
     if not clean_query:
@@ -379,3 +397,125 @@ def hermes_memory_provider_writeback(
         )
     except Exception as exc:
         return _json_error(str(exc), tool=clean_tool)
+
+
+def read_allowlist() -> list[str]:
+    """Provider-native READ tool names permitted for hermes_memory_provider_read.
+
+    Empty (the default) means disabled, same fail-closed default as
+    ``writeback_allowlist``.
+    """
+    raw = os.environ.get(READ_ALLOWLIST_ENV, "") or ""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def hermes_memory_provider_read(
+    tool: str,
+    args: dict[str, Any] | None = None,
+    session_id: str = "",
+    profile: str = "default",
+    platform: str = "cli",
+) -> str:
+    """Allowlisted, provider-neutral proxy for a memory provider's own read tools.
+
+    ``hermes_external_context_recall`` drives ``MemoryManager.prefetch_all()``
+    — a cached, cadence-gated auto-context injector built for system-prompt
+    priming, not a point query (see that function's docstring). This instead
+    dispatches straight to a provider's own read tool via
+    ``MemoryManager.handle_tool_call()`` — the same call a provider's tool
+    schema already promises for e.g. Honcho's ``honcho_search`` — so the
+    result reflects the query just asked, with no cache and no cadence gate.
+
+    Disabled by default: only provider-native tool names listed in
+    RANDOKU_MEMORY_READ_TOOLS are permitted, so no provider is named in code
+    (rule #1) and the operator alone decides which of a provider's tools are
+    safe to expose read-only here (e.g. Honcho's honcho_profile also accepts
+    a writing `card` argument — don't allowlist it unless that's intended).
+    ``args`` is forwarded verbatim, mirroring the write-back proxy's contract.
+    A transient session-init error (a fresh per-call manager racing its own
+    startup) is retried, not faked, exactly like the write-back proxy.
+    """
+    clean_tool = (tool or "").strip()
+    call_args: dict[str, Any] = args if isinstance(args, dict) else {}
+    allowlist = read_allowlist()
+
+    if not clean_tool:
+        return _json_error(
+            "A provider tool name is required.",
+            allowlist=allowlist,
+            hint=f"Allowlist provider read tools via {READ_ALLOWLIST_ENV}.",
+        )
+    if clean_tool not in allowlist:
+        return _json_error(
+            f"Provider tool {clean_tool!r} is not allowlisted for read access.",
+            tool=clean_tool,
+            allowlist=allowlist,
+            hint=f"Add it to {READ_ALLOWLIST_ENV} (comma-separated) to permit it.",
+        )
+
+    effective_platform = platform or "cli"
+    try:
+        manager, provider_name, note = _build_external_memory_manager(
+            session_id=session_id,
+            platform=effective_platform,
+            profile=profile,
+        )
+        if manager is None:
+            return _json_ok(
+                provider=provider_name,
+                provider_loaded=False,
+                provider_available=False,
+                tool=clean_tool,
+                session_id=session_id,
+                platform=platform,
+                effective_platform=effective_platform,
+                content="",
+                empty=True,
+                note=note,
+            )
+
+        ok = False
+        message = ""
+        transient = False
+        try:
+            for attempt in range(1, _WRITE_MAX_ATTEMPTS + 1):
+                raw = manager.handle_tool_call(clean_tool, call_args)
+                ok, message, transient = _interpret_provider_result(raw)
+                if ok or not transient:
+                    break
+                if attempt < _WRITE_MAX_ATTEMPTS:
+                    time.sleep(_WRITE_RETRY_SLEEP_S)
+        finally:
+            try:
+                manager.shutdown_all()
+            except Exception:
+                pass
+
+        if not ok:
+            return _json_error(
+                message,
+                provider=provider_name,
+                tool=clean_tool,
+                retryable=transient,
+                session_id=session_id,
+                platform=platform,
+            )
+
+        return _json_ok(
+            provider=provider_name,
+            provider_loaded=True,
+            provider_available=True,
+            tool=clean_tool,
+            session_id=session_id,
+            platform=platform,
+            effective_platform=effective_platform,
+            content=message,
+            empty=not bool(message and message.strip()),
+        )
+    except Exception as exc:
+        return _json_error(
+            str(exc),
+            tool=clean_tool,
+            session_id=session_id,
+            platform=platform,
+        )

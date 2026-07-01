@@ -50,6 +50,12 @@ export RANDOKU_ENABLE_SESSION_SEARCH="${RANDOKU_ENABLE_SESSION_SEARCH:-1}"
 # loopback/tunnel HTTP server; override with an empty value to disable, e.g.
 # RANDOKU_MEMORY_WRITEBACK_TOOLS= ./start.sh
 export RANDOKU_MEMORY_WRITEBACK_TOOLS="${RANDOKU_MEMORY_WRITEBACK_TOOLS:-honcho_conclude}"
+# Provider memory READ allowlist (comma-separated provider-native tool
+# names), for hermes_memory_provider_read — a precise, uncached lookup
+# distinct from hermes_external_context_recall's cached auto-context.
+# Defaults to honcho_search (read-only: no write-capable args). Override with
+# an empty value to disable, e.g. RANDOKU_MEMORY_READ_TOOLS= ./start.sh
+export RANDOKU_MEMORY_READ_TOOLS="${RANDOKU_MEMORY_READ_TOOLS:-honcho_search}"
 
 echo "🚀 啟動 randoku-sidecar MCP sidecar（loopback HTTP；Operator + session search）..."
 echo "   HERMES_HOME=$HERMES_HOME"
@@ -60,6 +66,7 @@ echo "   Allowed profiles: $RANDOKU_OPERATOR_ALLOWED_PROFILES"
 echo "   Allowed paths: $RANDOKU_OPERATOR_ALLOWED_PATHS"
 echo "   Gates: session_search=$RANDOKU_ENABLE_SESSION_SEARCH, terminal=off"
 echo "   Write-back tools: ${RANDOKU_MEMORY_WRITEBACK_TOOLS:-(disabled)}"
+echo "   Read tools: ${RANDOKU_MEMORY_READ_TOOLS:-(disabled)}"
 if [[ "$RANDOKU_OPERATOR_APPLY_MODE" == "direct" ]]; then
     echo "   WARNING: mutating tools can write when calls pass dry_run=false"
 fi

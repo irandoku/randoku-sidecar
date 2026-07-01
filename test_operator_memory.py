@@ -397,3 +397,106 @@ def test_provider_writeback_transient_exhausted_reports_retryable(monkeypatch, a
     assert parsed["retryable"] is True
     assert len(manager.calls) == om._WRITE_MAX_ATTEMPTS
     assert manager.shutdown_called == 1
+
+
+# --- provider read proxy (recall/search parity fix) ------------------------
+
+
+def _enable_read(monkeypatch, allow="honcho_search"):
+    if allow is None:
+        monkeypatch.delenv("RANDOKU_MEMORY_READ_TOOLS", raising=False)
+    else:
+        monkeypatch.setenv("RANDOKU_MEMORY_READ_TOOLS", allow)
+
+
+def test_provider_read_rejects_missing_tool(monkeypatch):
+    _enable_read(monkeypatch)
+    parsed = json.loads(om.hermes_memory_provider_read(""))
+    assert parsed["success"] is False
+    assert "tool name is required" in parsed["error"]
+
+
+def test_provider_read_rejects_non_allowlisted(monkeypatch):
+    _enable_read(monkeypatch, allow=None)
+
+    def boom(**kwargs):
+        raise AssertionError("manager must not be built for a refused call")
+
+    monkeypatch.setattr(om, "_build_external_memory_manager", boom)
+
+    parsed = json.loads(om.hermes_memory_provider_read("honcho_search", {"query": "dbx"}))
+    assert parsed["success"] is False
+    assert "not allowlisted" in parsed["error"]
+    assert parsed["allowlist"] == []
+
+
+def test_provider_read_no_provider_configured(monkeypatch):
+    _enable_read(monkeypatch)
+    monkeypatch.setattr(
+        om, "_build_external_memory_manager", lambda **kwargs: (None, "", "No memory.provider configured.")
+    )
+
+    parsed = json.loads(om.hermes_memory_provider_read("honcho_search", {"query": "dbx"}))
+    assert parsed["success"] is True
+    assert parsed["provider_loaded"] is False
+    assert parsed["empty"] is True
+
+
+def test_provider_read_returns_search_hit_and_forwards_args(monkeypatch):
+    _enable_read(monkeypatch)
+    manager = FakeWriteManager(
+        [json.dumps({"result": "DBX is worth trying as a lightweight assistant tool. Score 6.5/10."})]
+    )
+    monkeypatch.setattr(
+        om, "_build_external_memory_manager", lambda **kwargs: (manager, "honcho", "")
+    )
+
+    parsed = json.loads(
+        om.hermes_memory_provider_read(
+            "honcho_search", {"query": "dbx database open source application", "peer": "user"}
+        )
+    )
+    assert parsed["success"] is True
+    assert parsed["provider"] == "honcho"
+    assert "DBX" in parsed["content"]
+    assert parsed["empty"] is False
+    assert manager.calls == [
+        ("honcho_search", {"query": "dbx database open source application", "peer": "user"})
+    ]
+    assert manager.shutdown_called == 1
+
+
+def test_provider_read_surfaces_provider_failure(monkeypatch):
+    _enable_read(monkeypatch)
+    manager = FakeWriteManager([json.dumps({"error": "No relevant context found."})])
+    monkeypatch.setattr(
+        om, "_build_external_memory_manager", lambda **kwargs: (manager, "honcho", "")
+    )
+
+    parsed = json.loads(om.hermes_memory_provider_read("honcho_search", {"query": "nonexistent topic"}))
+    assert parsed["success"] is False
+    assert parsed["error"] == "No relevant context found."
+    assert parsed["retryable"] is False
+    assert manager.shutdown_called == 1
+
+
+def test_provider_read_retries_transient_then_succeeds(monkeypatch):
+    _enable_read(monkeypatch)
+    monkeypatch.setattr(om.time, "sleep", lambda *_: None)
+    manager = FakeWriteManager(
+        [
+            json.dumps({"error": "Honcho session is still initializing; try again shortly."}),
+            json.dumps({"result": "hermes-browser-extension is a browser context adapter."}),
+        ]
+    )
+    monkeypatch.setattr(
+        om, "_build_external_memory_manager", lambda **kwargs: (manager, "honcho", "")
+    )
+
+    parsed = json.loads(
+        om.hermes_memory_provider_read("honcho_search", {"query": "hermes-browser-extension evaluation"})
+    )
+    assert parsed["success"] is True
+    assert "browser context adapter" in parsed["content"]
+    assert len(manager.calls) == 2
+    assert manager.shutdown_called == 1

@@ -556,8 +556,12 @@ registered next to `hermes_external_context_recall`:
    new conclusion, not delete an old one), and delete is PII-only and needs a
    `conclusion_id` the write path does not return; defer to a dedicated,
    separately-gated tool if a real PII-removal need appears. *Granular reads
-   excluded* — out of scope for write-back; the aggregate
-   `hermes_external_context_recall` already serves synthesized recall.
+   excluded from write-back* — reads got their own governed proxy instead
+   (`hermes_memory_provider_read`, see recall/search parity fix below): the
+   assumption that `hermes_external_context_recall`'s aggregate prefetch
+   already served synthesized recall turned out wrong. That prefetch is
+   cached and cadence-gated for system-prompt priming, so a topic-specific
+   query could lose out to the provider's own generic startup prewarm.
 3. **Manager builder: reuse `_build_external_memory_manager`** + finally
    shutdown — strongest read/write alignment (§2), one code path.
 4. **Peer: hardcode the provider default** — no `peer` param exposed; honcho's

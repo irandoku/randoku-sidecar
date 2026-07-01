@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- Fixed a recall/search parity gap: `hermes_external_context_recall` drives
+  `MemoryManager.prefetch_all()`, a cached, cadence-gated auto-context
+  injector built to prime a system prompt — not a point query. Because the
+  sidecar builds a fresh manager per call, a topic-specific query could lose
+  out to the provider's own generic startup prewarm (e.g. Honcho's
+  "summarize what you know about this user"), so a caller asking about a
+  specific past evaluation got back generic user-profile content instead.
+  Added `hermes_memory_provider_read(tool, args, ...)`, an allowlisted,
+  provider-neutral proxy that dispatches straight to a provider's own read
+  tool via `MemoryManager.handle_tool_call()` (e.g. Honcho's
+  `honcho_search`) — no cache, no cadence gate, same retry-on-transient
+  handling as the write-back proxy. Disabled by default; permitted tool
+  names come from the new `RANDOKU_MEMORY_READ_TOOLS` env allowlist
+  (`start.sh` defaults it to `honcho_search`). `hermes_external_context_recall`'s
+  description was also updated to make clear it is not a precise search tool.
+
 - `start.sh` now exports `RANDOKU_MEMORY_WRITEBACK_TOOLS` (defaulting to
   `honcho_conclude`, overridable — set it empty to disable). Previously the
   loopback/tunnel HTTP server launched by `start.sh` never received the

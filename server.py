@@ -1054,6 +1054,17 @@ def hermes_external_context_recall(
     profile: str = "default",
     platform: str = "cli",
 ) -> str:
+    """Recall broad external auto-context for prompt augmentation.
+
+    This is a cached, cadence-gated snapshot (peer representation/card plus a
+    periodically-refreshed dialectic answer) meant to prime a system prompt —
+    it may return generic user profile, AI self-representation, or session
+    summaries rather than something specific to ``query``. It is NOT a
+    precise topic-specific search: a fresh sidecar call can even replay a
+    provider's own generic startup prewarm instead of answering ``query``.
+    For a precise, uncached lookup over a provider's own search tool (e.g.
+    Honcho's honcho_search), use hermes_memory_provider_read instead.
+    """
     return op_memory.hermes_external_context_recall(
         query=query,
         session_id=session_id,
@@ -1080,6 +1091,32 @@ def hermes_memory_provider_writeback(
         tool=tool,
         args=args,
         dry_run=dry_run,
+    )
+
+
+def hermes_memory_provider_read(
+    tool: str,
+    args: dict[str, Any] | None = None,
+    session_id: str = "",
+    profile: str = "default",
+    platform: str = "cli",
+) -> str:
+    """Allowlisted, provider-neutral proxy for a memory provider's own read tools.
+
+    Use this for a precise, uncached lookup — e.g. Honcho's honcho_search —
+    instead of hermes_external_context_recall's cached auto-context snapshot.
+    Disabled by default: only provider-native tool names listed in
+    RANDOKU_MEMORY_READ_TOOLS are permitted. The provider is never named in
+    code; ``args`` is forwarded verbatim. Read-only: do not allowlist a tool
+    that also accepts a write argument (e.g. Honcho's honcho_profile with
+    `card`) unless that is intended.
+    """
+    return op_memory.hermes_memory_provider_read(
+        tool=tool,
+        args=args,
+        session_id=session_id,
+        profile=profile,
+        platform=platform,
     )
 
 
@@ -1257,6 +1294,7 @@ def register_tools(server: FastMCP) -> None:
     server.add_tool(hermes_workspace_run_test, meta=tool_meta())
     server.add_tool(hermes_external_context_recall, meta=tool_meta())
     server.add_tool(hermes_memory_provider_writeback, meta=tool_meta())
+    server.add_tool(hermes_memory_provider_read, meta=tool_meta())
     server.add_tool(hermes_codegraph_status, meta=tool_meta())
     for codegraph_tool_name in (
         "hermes_codegraph_search",
