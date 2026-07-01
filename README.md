@@ -21,7 +21,7 @@ The guiding principle is **safe by default, mutation by explicit opt-in**:
 | Direct Operator | operator enabled + `apply_mode=direct` | writes allowed only when the tool call also sets `dry_run=false` |
 | Owner Mode | `level=owner` + exact owner ack | break-glass local owner tools; still denies secret paths |
 
-For the full Operator Mode guide, new-user quickstart, and stdio/tunnel safety model, see [`docs/operator-mode.md`](docs/operator-mode.md).
+For the full Operator Mode guide, new-user quickstart, and stdio/tunnel safety model, see [`docs/operator-mode.md`](docs/operator-mode.md). For the Owner Mode governance model and public-issue sanitization policy, see [`docs/owner-mode-governance.md`](docs/owner-mode-governance.md) and [`docs/public-issue-sanitization.md`](docs/public-issue-sanitization.md).
 
 ## Security posture
 

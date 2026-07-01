@@ -720,6 +720,79 @@ def test_owner_run_command_in_apply_mode_dry_run_returns_dry_run_plan(workspace_
     assert parsed["plan"]["argv"] == ["echo", "hi"]
 
 
+# --- Owner Mode: pinned scope-bypass behavior (docs/owner-mode-governance.md) --
+#
+# Owner primitives are a deliberate high-privilege escape hatch: unlike the
+# workspace-level tools, they do not enforce RANDOKU_OPERATOR_ALLOWED_PATHS
+# and hermes_owner_run_command does not require a workdir at all. These
+# tests pin that behavior so a future change to it is a deliberate decision,
+# not an accident. See docs/owner-mode-governance.md section 9.
+
+
+def test_owner_patch_allows_normal_path_outside_allowed_paths_if_owner_ready(
+    workspace_tree, clean_env, audit_override, monkeypatch, tmp_path
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(tmp_path / "elsewhere"))
+    target = workspace_tree / "README.md"
+    out = ows.hermes_owner_patch(
+        path=str(target), old_string="# Project", new_string="# Owner Edit",
+        dry_run=False,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert "# Owner Edit" in target.read_text(encoding="utf-8")
+
+
+def test_owner_write_file_allows_normal_path_outside_allowed_paths_if_owner_ready(
+    workspace_tree, clean_env, audit_override, monkeypatch, tmp_path
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(tmp_path / "elsewhere"))
+    target = workspace_tree / "owner_new_file.txt"
+    out = ows.hermes_owner_write_file(path=str(target), content="hi", dry_run=False)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert target.read_text(encoding="utf-8") == "hi"
+
+
+def test_owner_run_command_allows_workdir_outside_allowed_paths_if_owner_ready(
+    workspace_tree, clean_env, audit_override, monkeypatch, tmp_path
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(tmp_path / "elsewhere"))
+    captured = {}
+
+    def fake_runner(argv, timeout=120, workdir=None):
+        captured["workdir"] = workdir
+        return (0, "ok", "")
+
+    out = ows.hermes_owner_run_command(
+        command="echo hi", workdir=str(workspace_tree), dry_run=False, runner=fake_runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert captured["workdir"] == str(workspace_tree)
+
+
+def test_owner_run_command_is_denylist_based_for_non_dangerous_command(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    """No allowlist of permitted binaries exists for owner_run_command
+    (unlike hermes_workspace_run_test's _is_allowed_test_command). Any
+    command that isn't a catastrophic pattern or secret-touching is
+    permitted."""
+    _enable_owner(monkeypatch)
+
+    def fake_runner(argv, timeout=120, workdir=None):
+        return (0, "ok", "")
+
+    out = ows.hermes_owner_run_command(command="whoami", dry_run=False, runner=fake_runner)
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["argv"] == ["whoami"]
+
+
 # --- Tool registration smoke test ----------------------------------------
 
 

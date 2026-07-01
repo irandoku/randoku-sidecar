@@ -132,6 +132,11 @@ $env:RANDOKU_OWNER_ACK="I_UNDERSTAND_THIS_CAN_MUTATE_MY_MACHINE"
 
 Do not use Owner Mode for public, shared, or always-on connectors.
 
+For the governance model behind Owner Mode — when it's appropriate to reach
+for an owner primitive, and how output destined for a public system (like a
+GitHub issue) must be sanitized before it leaves the machine — see
+[`docs/owner-mode-governance.md`](owner-mode-governance.md).
+
 ## Operator levels
 
 Higher levels include the lower levels before them.
