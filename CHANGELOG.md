@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+- Fixed `hermes_operator_status` reporting a stale hand-maintained
+  `registered_operator_tools` list (it was missing `hermes_workspace_apply_diff`,
+  the memory-provider tools, external context recall, and the codegraph tools).
+  `register_tools()` now records each tool name as it actually registers and
+  the status tool reports that list, so the two can no longer diverge.
+  (issue #6)
+
+- Added a structured operator error envelope and diagnostic status vocabulary
+  in `operator_policy.py`: `PASS`/`WARN`/`FAIL`/`UNSUPPORTED` constants,
+  `make_error_envelope` / `error_from_exception` (legacy `success`/`error`
+  fields preserved), 16-hex `trace_id` for correlating a failure with its
+  audit record, and `sanitize_error_message` — secret redaction, whole-span
+  notes-vault removal, other local paths reduced to `.../<basename>`, 500-char
+  cap. Converted two handlers as examples (`hermes_owner_repo_issue_create`,
+  `hermes_operator_policy`); the remaining raw `str(exc)` responses migrate
+  incrementally in later issues. (issue #7)
+
+- Added `hermes_operator_doctor`: a read-only health check across the
+  sidecar's own surfaces (runtime imports, operator posture, registered
+  tools, memory-provider allowlists, session search, codegraph, and a
+  names-only stdio-vs-tunnel env parity check parsed from `start.sh`). No
+  mutation, no subprocesses, no secret values or absolute paths in output;
+  the report carries transport identity and a `trace_id`. (issue #8)
+
+- Added `hermes_release_doctor`: a lightweight, read-only release-readiness
+  check (tracked-file syntax, secret-like tracked filenames, dirty tree,
+  pyproject-version-in-CHANGELOG, documented tool count vs the no-toggles
+  registry baseline, elevated posture warning, and an opt-in bounded pytest
+  run). Blocking problems are `FAIL` with `"blocking": true` metadata — there
+  is no separate `BLOCKED` status. The doc tool-count check compares against
+  the no-toggles baseline (env-gated tools subtracted) so a gated process,
+  e.g. the tunnel with session search on, does not report false drift.
+  (issue #9)
+
 - Fixed a recall/search parity gap: `hermes_external_context_recall` drives
   `MemoryManager.prefetch_all()`, a cached, cadence-gated auto-context
   injector built to prime a system prompt — not a point query. Because the

@@ -15,3 +15,13 @@ This project is not a replacement for Hermes Agent and is not an official Hermes
 - human approval for high-risk operations
 
 If upstream `hermes-gpt` later adopts similar ideas or becomes a broader collaborative project, compatible improvements may be contributed back or cherry-picked where appropriate.
+
+## Concepts adapted from upstream v0.3.0
+
+The structured operator error envelope, the `PASS`/`WARN`/`FAIL`/`UNSUPPORTED`
+status vocabulary, and the operator-doctor / release-doctor concepts were
+adapted (re-implemented, not ported) from upstream `hermes-gpt` v0.3.0's
+Operator Reliability Release, following a selective audit
+([irandoku/randoku-sidecar#5](https://github.com/irandoku/randoku-sidecar/issues/5)).
+Upstream's recovery orchestration (`hermes_operator_recover`) was deliberately
+not adopted.

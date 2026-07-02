@@ -203,7 +203,7 @@ Operator / Owner Mode is a tiered control plane. The levels form a strict ascend
 
 | Level | Capabilities |
 | --- | --- |
-| `read_only` | status, policy, doctor, audit tail, cron list/status, skill diff/list/view, config get, env status, gateway status, git status/diff |
+| `read_only` | status, policy, doctor, release doctor, audit tail, cron list/status, skill diff/list/view, config get, env status, gateway status, git status/diff |
 | `cron` | + cron run, pause, copy, move |
 | `skills` | + skill create, edit, patch, write_file, copy, sync_to_default, delete |
 | `skills_config` | + config set/patch, env set/copy (non-secret keys only) |
@@ -303,6 +303,14 @@ Do not use this bypass for anything but throwaway local testing.
 ```bash
 ./venv/bin/python -m pytest          # full suite
 ./venv/bin/python -m py_compile server.py
+```
+
+Most of this checklist is automated by the `hermes_release_doctor` tool
+(see [docs/operator-mode.md](docs/operator-mode.md)); run it with
+`full_tests=true` before tagging:
+
+```bash
+./venv/bin/python -c "import server; print(server.hermes_release_doctor(full_tests=True))"
 ```
 
 Before publishing:
