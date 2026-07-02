@@ -333,7 +333,7 @@ under it. `hermes_git_diff` also refuses a secret-like `pathspec`.
 - Reconnect the connector.
 - Create a new connector name if the old one is cached.
 - Verify `/mcp` directly with list-tools.
-- If direct list-tools shows 39 tools, the server is fine and the connector registration is stale.
+- If direct list-tools shows the full tool count (49 with no `RANDOKU_ENABLE_*` toggles set), the server is fine and the connector registration is stale.
 
 ### Profile appears missing
 

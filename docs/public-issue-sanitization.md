@@ -6,11 +6,11 @@ the contract a GitHub-issue-creation recipe (or any recipe that writes to a
 public external system) must satisfy.
 
 `hermes_owner_repo_issue_create` implements this contract end to end:
-preflight (`git rev-parse`, `gh auth status`, `gh repo view`), unconditional
-sanitization, a reviewable dry-run plan, and — when `apply_mode=direct` and
-`dry_run=false` — direct creation via `gh issue create --body-file`. See the
-scope list at the bottom of this document for what direct creation still
-does *not* cover.
+preflight (`git rev-parse`, `gh auth status`, `gh repo view`, `gh label
+list`), unconditional sanitization, a reviewable dry-run plan, and — when
+`apply_mode=direct` and `dry_run=false` — direct creation via `gh issue
+create --body-file`. See the scope list at the bottom of this document for
+what direct creation still does *not* cover.
 
 ## Problem
 
