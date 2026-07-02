@@ -17,6 +17,9 @@ Tools:
 - ``hermes_owner_run_command``     : owner      — arbitrary command (with catastrophic blocks)
 - ``hermes_owner_patch``           : owner      — arbitrary file patch (still denies secret paths)
 - ``hermes_owner_write_file``      : owner      — arbitrary file write (still denies secret paths)
+- ``hermes_owner_repo_issue_create``: owner      — governed recipe: dry-run plan for a public-safe
+  GitHub issue (see docs/owner-mode-governance.md, docs/public-issue-sanitization.md).
+  Phase 4A: dry-run plan only, no ``gh issue create`` execution yet.
 
 Safety rules:
 - No shell=True anywhere. Ever.
@@ -1540,5 +1543,237 @@ def hermes_owner_write_file(
             success=False,
             error=str(exc),
             path=path,
+        )
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Governed Owner recipe: public-safe GitHub issue creation (Phase 4A)
+#
+# Unlike the raw owner primitives above, this recipe is scope-restricted: the
+# workdir must be a real git repository under RANDOKU_OPERATOR_ALLOWED_PATHS,
+# and the issue body is always sanitized before it appears in output or
+# audit. Phase 4A only produces a reviewable dry-run plan; it never invokes
+# ``gh issue create``. Direct execution is Phase 4B, not implemented here.
+# ---------------------------------------------------------------------------
+
+_ISSUE_CREATE_RECIPE = "repo_issue_create"
+
+# Markers that, combined with a path-shaped token, mark that token as
+# secret-like for the purposes of a *public issue body* (narrower than
+# op.is_denied_path, which gates local file access — this gates what a
+# human reviewer sees in a dry-run preview and what may reach GitHub).
+#
+# Matched against the token's final path segment only (like
+# op.is_denied_path matches SECRET_PATH_SUBSTRINGS against ``resolved.name``,
+# not the whole path) so that generic markers such as "private" don't fire
+# on every path under a platform temp dir (e.g. macOS's /private/var/...).
+_SECRET_BODY_MARKERS: tuple[str, ...] = op.SECRET_PATH_SUBSTRINGS + (".env", ".ssh")
+
+_LOCAL_ENDPOINT_RE = re.compile(r"(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", re.IGNORECASE)
+_NOTES_VAULT_RE = re.compile(r"obsidian|(^|/)vault(/|$)", re.IGNORECASE)
+
+
+def _looks_path_like(token: str) -> bool:
+    return token.startswith("/") or token.startswith("~") or token.startswith(".") or "/" in token
+
+
+def _sanitize_public_issue_body(
+    text: str, *, repo_root: Path, allowed_paths: list[Path],
+) -> tuple[str, dict[str, Any]]:
+    """Deterministically strip local/private details from an issue body.
+
+    Runs unconditionally (Phase 4A: always sanitize, regardless of repo
+    visibility — simpler and safer than trusting visibility detection).
+    Secret-like tokens are redacted before the coarser repo-root / private-
+    path / home substitutions, so a secret path under the repo root or home
+    directory collapses fully to ``<secret-like-path>`` rather than leaking
+    a partially-redacted prefix.
+    """
+    original = text or ""
+    secret_count = 0
+    vault_count = 0
+    endpoint_count = 0
+
+    def _redact_token(match: "re.Match[str]") -> str:
+        nonlocal secret_count, vault_count, endpoint_count
+        token = match.group(0)
+        lowered = token.lower()
+        if _looks_path_like(token):
+            basename = token.rsplit("/", 1)[-1].lower()
+            if any(marker in basename for marker in _SECRET_BODY_MARKERS):
+                secret_count += 1
+                return "<secret-like-path>"
+        if _NOTES_VAULT_RE.search(lowered):
+            vault_count += 1
+            return "<private-notes-vault>"
+        if _LOCAL_ENDPOINT_RE.search(lowered):
+            endpoint_count += 1
+            return "<local-endpoint>"
+        return token
+
+    working = re.sub(r"\S+", _redact_token, original)
+
+    repo_root_text = str(repo_root)
+    repo_root_count = working.count(repo_root_text)
+    if repo_root_count:
+        working = working.replace(repo_root_text, "<repo-root>")
+
+    private_paths_count = 0
+    for allowed in allowed_paths:
+        allowed_text = str(allowed)
+        if allowed_text == repo_root_text:
+            continue
+        hits = working.count(allowed_text)
+        if hits:
+            private_paths_count += hits
+            working = working.replace(allowed_text, "<private-path>")
+
+    home_text = str(Path.home())
+    home_count = working.count(home_text)
+    if home_count:
+        working = working.replace(home_text, "<home>")
+
+    summary = {
+        "enabled": True,
+        "body_changed": working != original,
+        "repo_root_redacted": repo_root_count,
+        "home_redacted": home_count,
+        "private_paths_redacted": private_paths_count,
+        "notes_vault_redacted": vault_count,
+        "secret_like_terms_redacted": secret_count,
+        "local_endpoints_redacted": endpoint_count,
+    }
+    return working, summary
+
+
+def hermes_owner_repo_issue_create(
+    workdir: str,
+    title: str,
+    body: str,
+    labels: Optional[list[str]] = None,
+    dry_run: bool = True,
+    runner=None,
+) -> str:
+    try:
+        policy = op.OperatorPolicy()
+        policy.require_owner(dry_run)
+        if not title or not title.strip():
+            raise ValueError("title is required.")
+        if body is None:
+            raise ValueError("body is required.")
+        label_list = list(labels) if labels else []
+
+        if not policy.effective_dry_run(dry_run):
+            # Phase 4A ships preflight + sanitized dry-run plans only. A
+            # direct request only reaches here when apply_mode=direct AND
+            # dry_run=false (effective_dry_run already downgrades every
+            # other combination to a plan, matching the other owner tools).
+            raise PermissionError(
+                "Direct issue creation is not implemented in Phase 4A. "
+                "Only dry-run plans are supported for hermes_owner_repo_issue_create; "
+                "call with dry_run=true (or leave apply_mode=dry_run) to preview."
+            )
+
+        # Governed recipes are stricter than raw owner primitives: workdir
+        # is required and must be a real, allowed, non-secret git repo.
+        if not workdir:
+            raise ValueError("workdir is required.")
+        policy.require_workspace_read_path(workdir)
+        normalized_workdir = op._normalize_path(workdir)
+        if not normalized_workdir.exists() or not normalized_workdir.is_dir():
+            raise FileNotFoundError(f"workdir not found or not a directory: {workdir}")
+        workdir_text = str(normalized_workdir)
+
+        run_fn = runner or op.run_argv
+
+        rc, out, err = run_fn(["git", "rev-parse", "--show-toplevel"], timeout=30, workdir=workdir_text)
+        if rc != 0:
+            raise PermissionError(
+                f"workdir is not a git repository or worktree: {op.redact_output(err) or op.redact_output(out)}"
+            )
+        repo_root = op._normalize_path(out.strip())
+
+        rc, out, err = run_fn(["gh", "auth", "status"], timeout=30, workdir=workdir_text)
+        if rc != 0:
+            raise PermissionError("gh auth status failed; cannot preflight issue creation.")
+
+        rc, out, err = run_fn(
+            ["gh", "repo", "view", "--json", "nameWithOwner,url,visibility"],
+            timeout=30, workdir=workdir_text,
+        )
+        if rc != 0:
+            raise PermissionError(f"gh repo view failed: {op.redact_output(err) or op.redact_output(out)}")
+        try:
+            repo_info = json.loads(out)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"gh repo view returned invalid JSON: {exc}") from exc
+
+        repo_name = repo_info.get("nameWithOwner") or "unknown/unknown"
+        repo_url = repo_info.get("url") or ""
+        # Missing/unknown visibility defaults to the safer, more-sanitized
+        # public-style assumption rather than trusting an absent field.
+        visibility = str(repo_info.get("visibility") or "UNKNOWN").upper()
+
+        sanitized_body, sanitization = _sanitize_public_issue_body(
+            body, repo_root=repo_root, allowed_paths=policy.allowed_paths,
+        )
+        body_len, body_sha256 = op._hash_secret_text(sanitized_body)
+
+        would_run = [
+            "gh", "issue", "create",
+            "--repo", repo_name,
+            "--title", title,
+            "--body-file", "<tempfile>",
+        ]
+        if label_list:
+            would_run += ["--label", ",".join(label_list)]
+
+        plan = {
+            "success": True,
+            "dry_run": True,
+            "recipe": _ISSUE_CREATE_RECIPE,
+            "repo": repo_name,
+            "repo_url": repo_url,
+            "visibility": visibility,
+            "workdir": workdir_text,
+            "title": title,
+            "labels": label_list,
+            "sanitization": sanitization,
+            "body_len": body_len,
+            "body_sha256": body_sha256,
+            "body_preview": sanitized_body[:280],
+            "would_run": would_run,
+            "requires_user_review": True,
+            "direct_supported": False,
+        }
+
+        op.audit_record(
+            tool="hermes_owner_repo_issue_create",
+            level=policy.level,
+            apply_mode=policy.apply_mode,
+            dry_run=True,
+            success=True,
+            changed=False,
+            summary=f"dry-run plan repo={repo_name} visibility={visibility}",
+            content=sanitized_body,
+            extra={
+                "recipe": _ISSUE_CREATE_RECIPE,
+                "repo": repo_name,
+                "visibility": visibility,
+                "title": title,
+                "labels": label_list,
+                "sanitization": sanitization,
+            },
+        )
+        return json.dumps(plan, indent=2)
+    except Exception as exc:
+        op.audit_record(
+            tool="hermes_owner_repo_issue_create",
+            level="owner",
+            apply_mode="unknown",
+            dry_run=dry_run,
+            success=False,
+            error=str(exc),
         )
         return json.dumps({"success": False, "error": str(exc)}, indent=2)

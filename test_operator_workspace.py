@@ -793,6 +793,251 @@ def test_owner_run_command_is_denylist_based_for_non_dangerous_command(
     assert parsed["argv"] == ["whoami"]
 
 
+# --- Owner Mode: hermes_owner_repo_issue_create (Phase 4A, dry-run only) --
+#
+# Governed recipe: preflights via git/gh through a fake runner, always
+# sanitizes the body, and only ever returns a dry-run plan in this phase.
+# No test here invokes real `gh` or performs an external write.
+
+
+def _gh_runner(*, repo_root, git_rc=0, gh_auth_rc=0, gh_repo_rc=0, gh_repo_json=None, calls=None):
+    if gh_repo_json is None:
+        gh_repo_json = {
+            "nameWithOwner": "irandoku/randoku-sidecar",
+            "url": "https://github.com/irandoku/randoku-sidecar",
+            "visibility": "PUBLIC",
+        }
+
+    def runner(argv, timeout=120, workdir=None):
+        if calls is not None:
+            calls.append(list(argv))
+        if argv[:2] == ["git", "rev-parse"]:
+            if git_rc != 0:
+                return (git_rc, "", "not a git repository")
+            return (0, str(repo_root), "")
+        if argv[:3] == ["gh", "auth", "status"]:
+            return (gh_auth_rc, "Logged in to github.com", "" if gh_auth_rc == 0 else "not logged in")
+        if argv[:3] == ["gh", "repo", "view"]:
+            if gh_repo_rc != 0:
+                return (gh_repo_rc, "", "gh repo view failed")
+            if gh_repo_json == "INVALID_JSON":
+                return (0, "not json", "")
+            return (0, json.dumps(gh_repo_json), "")
+        return (1, "", f"unexpected command: {argv}")
+
+    return runner
+
+
+def test_owner_repo_issue_create_refuses_without_owner(workspace_tree, clean_env, audit_override):
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "operator mode is disabled" in parsed["error"].lower()
+
+
+def test_owner_repo_issue_create_refuses_without_ack(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_owner(monkeypatch, ack=False)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "Owner Mode requires" in parsed["error"]
+
+
+def test_owner_repo_issue_create_requires_workdir(workspace_tree, clean_env, audit_override, monkeypatch):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    out = ows.hermes_owner_repo_issue_create(workdir="", title="t", body="b", dry_run=True)
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "workdir is required" in parsed["error"].lower()
+
+
+def test_owner_repo_issue_create_requires_workdir_under_allowed_paths(
+    workspace_tree, clean_env, audit_override, monkeypatch, tmp_path
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(tmp_path / "elsewhere"))
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "not under any allowed path" in parsed["error"].lower()
+
+
+def test_owner_repo_issue_create_refuses_non_git_workdir(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, git_rc=128)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "git repository" in parsed["error"].lower()
+
+
+def test_owner_repo_issue_create_refuses_direct_execution_in_phase_4a(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    calls = []
+    runner = _gh_runner(repo_root=workspace_tree, calls=calls)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "phase 4a" in parsed["error"].lower()
+    assert calls == [], "no preflight or gh command should run for an unsupported direct request"
+
+
+def test_owner_repo_issue_create_dry_run_returns_public_safe_plan(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree),
+        title="Bug: recall returns empty",
+        body="Plain public-safe description, no local details.",
+        labels=["bug", "owner-mode"],
+        dry_run=True,
+        runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is True
+    assert parsed["recipe"] == "repo_issue_create"
+    assert parsed["repo"] == "irandoku/randoku-sidecar"
+    assert parsed["visibility"] == "PUBLIC"
+    assert parsed["labels"] == ["bug", "owner-mode"]
+    assert parsed["requires_user_review"] is True
+    assert parsed["direct_supported"] is False
+    assert "sanitization" in parsed and parsed["sanitization"]["enabled"] is True
+
+
+def test_owner_repo_issue_create_uses_body_file_not_raw_body_in_argv(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    raw_body = "very secret raw body text that must never appear in argv"
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=raw_body, dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert "--body-file" in parsed["would_run"]
+    assert raw_body not in parsed["would_run"]
+    assert not any(raw_body in str(arg) for arg in parsed["would_run"])
+
+
+def test_owner_repo_issue_create_sanitizes_local_paths(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    body = f"See {workspace_tree}/src/main.py and {Path.home()}/Downloads/notes.txt for context."
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=body, dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert str(workspace_tree) not in parsed["body_preview"]
+    assert str(Path.home()) not in parsed["body_preview"]
+    assert "<repo-root>" in parsed["body_preview"]
+    assert "<home>" in parsed["body_preview"]
+    assert parsed["sanitization"]["repo_root_redacted"] >= 1
+    assert parsed["sanitization"]["home_redacted"] >= 1
+    assert parsed["sanitization"]["body_changed"] is True
+
+
+def test_owner_repo_issue_create_sanitizes_secret_like_paths(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    body = "Repro needs ~/.ssh/id_ed25519 and a .env file with a token in it."
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=body, dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert "id_ed25519" not in parsed["body_preview"]
+    assert ".env" not in parsed["body_preview"]
+    assert "<secret-like-path>" in parsed["body_preview"]
+    assert parsed["sanitization"]["secret_like_terms_redacted"] >= 2
+
+
+def test_owner_repo_issue_create_audit_omits_raw_body(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    raw_body = f"private note: my vault lives at {workspace_tree}/notes and token=abc123secretvalue"
+    ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=raw_body, dry_run=True, runner=runner,
+    )
+    audit_text = audit_override.read_text(encoding="utf-8")
+    assert raw_body not in audit_text
+    assert "abc123secretvalue" not in audit_text
+    assert "content_sha256" in audit_text
+
+
+def test_owner_repo_issue_create_refuses_when_gh_auth_fails(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, gh_auth_rc=1)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "gh auth status" in parsed["error"].lower()
+
+
+def test_owner_repo_issue_create_refuses_invalid_gh_repo_view_json(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, gh_repo_json="INVALID_JSON")
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "invalid json" in parsed["error"].lower()
+
+
+def test_tool_registration_includes_owner_repo_issue_create(monkeypatch):
+    import asyncio
+    import server
+
+    for name in [
+        "RANDOKU_ENABLE_WRITE", "RANDOKU_ENABLE_SESSION_SEARCH",
+        "RANDOKU_ENABLE_TERMINAL", "RANDOKU_UNSAFE_REMOTE_NOAUTH",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+
+    built = server.build_server()
+    tools = asyncio.run(built.list_tools())
+    names = {tool.name for tool in tools}
+    assert "hermes_owner_repo_issue_create" in names
+
+
 # --- Tool registration smoke test ----------------------------------------
 
 
@@ -853,6 +1098,7 @@ def test_tool_registration_includes_new_operator_tools(monkeypatch):
         "hermes_owner_run_command",
         "hermes_owner_patch",
         "hermes_owner_write_file",
+        "hermes_owner_repo_issue_create",
     ]
     for tool_name in expected:
         assert tool_name in names, f"missing operator tool: {tool_name}"

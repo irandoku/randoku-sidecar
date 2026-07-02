@@ -2,9 +2,14 @@
 
 This document is a companion to
 [`docs/owner-mode-governance.md`](owner-mode-governance.md) §5–§7. It defines
-the contract a future GitHub-issue-creation recipe (or any recipe that
-writes to a public external system) must satisfy. **No such recipe is
-implemented yet** — see the constraint list at the bottom of this document.
+the contract a GitHub-issue-creation recipe (or any recipe that writes to a
+public external system) must satisfy.
+
+As of Phase 4A, `hermes_owner_repo_issue_create` implements this contract
+for **dry-run plans only** — preflight (`git rev-parse`, `gh auth status`,
+`gh repo view`), unconditional sanitization, and a reviewable plan shape.
+It does not call `gh issue create`; direct execution is Phase 4B and is not
+implemented — see the constraint list at the bottom of this document.
 
 ## Problem
 
@@ -54,10 +59,11 @@ they describe the project's own public source, not the local environment:
 - the concepts `dry_run`, `audit`, `body-file`
 - acceptance criteria and test names
 
-## Future recipe requirement
+## Recipe requirement
 
-A future GitHub issue creation recipe (e.g. a `hermes_owner_repo_issue_create`
-built on top of `hermes_owner_run_command`, or an equivalent) must:
+`hermes_owner_repo_issue_create` (built directly on `git`/`gh` via the same
+`runner` pattern as the owner primitives, not on `hermes_owner_run_command`)
+must:
 
 1. Distinguish private analysis input from the public issue body as two
    separate values — never pass raw analysis straight through as the body.
@@ -74,13 +80,16 @@ built on top of `hermes_owner_run_command`, or an equivalent) must:
 6. Require human review before direct (non-dry-run) creation, same as any
    other Owner direct mutation (`docs/owner-mode-governance.md` §4, §8).
 
-## Explicit non-goals of this pass
+## Explicit non-goals of Phase 4A
 
-This document defines the policy only. Per the governing issue for this
-work:
-
-- `hermes_owner_repo_issue_create` / `hermes_owner_github_issue_create` are
-  **not implemented** in this pass.
+- Direct issue creation (an actual `gh issue create` call) is **not
+  implemented**. `hermes_owner_repo_issue_create` refuses direct execution
+  with an explicit "not implemented in Phase 4A" message even when
+  `dry_run=false` and `apply_mode=direct`; see
+  `docs/owner-mode-governance.md` §9.
+- PR creation, git push, release/publish operations, a generic GitHub
+  toolbox, and arbitrary `gh` command execution are out of scope.
 - Owner Mode is **not enabled** as part of this work.
-- No `gh issue create` (or any external write) is executed as part of this
-  work.
+- No `gh issue create` (or any other external write) is executed as part of
+  this work — all tests fake the `runner` and never invoke real `git`/`gh`
+  network calls.

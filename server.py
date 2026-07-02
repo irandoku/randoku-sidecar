@@ -791,6 +791,7 @@ def hermes_operator_status() -> str:
             "hermes_owner_run_command",
             "hermes_owner_patch",
             "hermes_owner_write_file",
+            "hermes_owner_repo_issue_create",
         ]
         result = {
             "success": True,
@@ -1209,6 +1210,18 @@ def hermes_owner_write_file(path: str, content: str, dry_run: bool = True) -> st
     return op_workspace.hermes_owner_write_file(path=path, content=content, dry_run=dry_run)
 
 
+def hermes_owner_repo_issue_create(
+    workdir: str,
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+    dry_run: bool = True,
+) -> str:
+    return op_workspace.hermes_owner_repo_issue_create(
+        workdir=workdir, title=title, body=body, labels=labels, dry_run=dry_run,
+    )
+
+
 def build_server(
     *,
     host: str = "127.0.0.1",
@@ -1308,6 +1321,7 @@ def register_tools(server: FastMCP) -> None:
     server.add_tool(hermes_owner_run_command, meta=tool_meta())
     server.add_tool(hermes_owner_patch, meta=tool_meta())
     server.add_tool(hermes_owner_write_file, meta=tool_meta())
+    server.add_tool(hermes_owner_repo_issue_create, meta=tool_meta())
 
 
 mcp = build_server()

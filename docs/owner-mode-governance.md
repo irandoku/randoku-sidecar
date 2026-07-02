@@ -104,10 +104,13 @@ worth building the moment the same class of action is likely to happen
 again, because that's where sanitization logic belongs (see §7) rather than
 being re-derived by the model each time from raw analysis.
 
-No governed recipe exists yet in this codebase. This document defines the
-policy a future recipe must satisfy; it does not implement one. See
+The first governed recipe, `hermes_owner_repo_issue_create` (GitHub issue
+creation), exists in dry-run-only form as of Phase 4A: it preflights the
+target repo via `git`/`gh`, always sanitizes the body, and returns a
+reviewable plan — it does not yet call `gh issue create`. Direct execution
+is Phase 4B and is not implemented. See
 [`docs/public-issue-sanitization.md`](public-issue-sanitization.md) for the
-first such recipe's contract (GitHub issue creation).
+sanitization contract this recipe follows.
 
 ## 6. Public or external output has a different safety boundary
 
