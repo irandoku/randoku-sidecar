@@ -497,3 +497,107 @@ def test_operator_doctor_env_parity_reports_names_only(monkeypatch):
 def test_operator_doctor_is_registered(monkeypatch):
     clear_gate_envs(monkeypatch)
     assert "hermes_operator_doctor" in tool_names(server.build_server())
+
+
+# ---------------------------------------------------------------------------
+# hermes_release_doctor (issue #9)
+# ---------------------------------------------------------------------------
+
+RELEASE_CHECKS = [
+    "compile",
+    "secret_files",
+    "working_tree",
+    "version_changelog",
+    "docs_tool_count",
+    "release_posture",
+]
+
+
+def _fake_git_runner(*, dirty=False, ls_files="server.py\n"):
+    def runner(argv, timeout=30, workdir=None):
+        if argv[:2] == ["git", "ls-files"]:
+            return (0, ls_files, "")
+        if argv[:2] == ["git", "status"]:
+            return (0, "M server.py\n" if dirty else "", "")
+        if argv[-2:] == ["pytest", "-q"] or "pytest" in argv:
+            return (1, "", "1 failed")
+        return (0, "", "")
+
+    return runner
+
+
+def test_release_doctor_report_shape(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+
+    report = json.loads(server.hermes_release_doctor())
+
+    assert report["success"] is True
+    assert report["overall_status"] in ("PASS", "WARN", "FAIL")
+    assert report["full_tests"] is False
+    assert sorted(report["checks"]) == sorted(RELEASE_CHECKS)  # no tests check unless opted in
+    assert len(report["trace_id"]) == 16
+    for check in report["checks"].values():
+        assert check["status"] in ("PASS", "WARN", "FAIL", "UNSUPPORTED")
+        assert check["layer"] == "release"
+
+
+def test_release_doctor_warns_on_dirty_tree(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+
+    checks = server._release_doctor_impl(False, 60, runner=_fake_git_runner(dirty=True))
+
+    assert checks["working_tree"]["status"] == "WARN"
+    assert checks["working_tree"]["code"] == "DIRTY_TREE"
+
+
+def test_release_doctor_blocks_on_secret_files(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+
+    checks = server._release_doctor_impl(
+        False, 60, runner=_fake_git_runner(ls_files="server.py\nconfig/.env\n"),
+    )
+
+    assert checks["secret_files"]["status"] == "FAIL"
+    assert checks["secret_files"]["blocking"] is True
+    assert checks["secret_files"]["code"] == "SECRET_FILE_DETECTED"
+
+
+def test_release_doctor_blocks_on_failing_tests(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+
+    checks = server._release_doctor_impl(True, 60, runner=_fake_git_runner())
+
+    assert checks["tests"]["status"] == "FAIL"
+    assert checks["tests"]["blocking"] is True
+
+
+def test_release_doctor_detects_doc_count_drift(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+    monkeypatch.setattr(server, "REGISTERED_TOOL_NAMES", ["only_one_tool"])
+
+    checks = server._release_doctor_impl(False, 60, runner=_fake_git_runner())
+
+    assert checks["docs_tool_count"]["status"] == "WARN"
+    assert checks["docs_tool_count"]["code"] == "DOC_COUNT_DRIFT"
+
+
+def test_release_doctor_warns_on_elevated_posture(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.op_policy.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(server.op_policy.OPERATOR_APPLY_MODE_ENV, "direct")
+    server.build_server()
+
+    checks = server._release_doctor_impl(False, 60, runner=_fake_git_runner())
+
+    assert checks["release_posture"]["status"] == "WARN"
+    assert checks["release_posture"]["code"] == "ELEVATED_POSTURE"
+
+
+def test_release_doctor_is_registered(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    assert "hermes_release_doctor" in tool_names(server.build_server())

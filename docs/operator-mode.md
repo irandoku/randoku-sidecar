@@ -366,6 +366,21 @@ The report includes `transport` (`stdio`, `streamable-http`, `sse`, or
 `unknown` when not served via `main()`), so you always know which process
 answered.
 
+## Release doctor
+
+`hermes_release_doctor` is a lightweight release-readiness check for the
+sidecar repo itself. Read-only: it never publishes, tags, commits, or
+mutates anything; the only subprocesses are read-only git queries and — only
+when explicitly requested with `full_tests=true` — the local pytest suite,
+bounded by `timeout` (default 300s).
+
+Checks: tracked-file syntax (in-process compile), secret-like tracked
+filenames (names only, blocking), dirty working tree, pyproject version
+mentioned in CHANGELOG.md, the documented tool count in this file vs the
+real registry, elevated operator posture during release, and the opt-in
+test run. Blocking problems are `FAIL` with `"blocking": true` metadata —
+there is no separate `BLOCKED` status.
+
 ## What is still denied
 
 The server still refuses or redacts access to:
@@ -394,7 +409,7 @@ under it. `hermes_git_diff` also refuses a secret-like `pathspec`.
 - Reconnect the connector.
 - Create a new connector name if the old one is cached.
 - Verify `/mcp` directly with list-tools.
-- If direct list-tools shows the full tool count (50 with no `RANDOKU_ENABLE_*` toggles set), the server is fine and the connector registration is stale.
+- If direct list-tools shows the full tool count (51 with no `RANDOKU_ENABLE_*` toggles set), the server is fine and the connector registration is stale.
 
 ### Profile appears missing
 

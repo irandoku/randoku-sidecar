@@ -5,6 +5,7 @@ import importlib.metadata
 import inspect
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -975,9 +976,7 @@ def _check_env_parity() -> dict[str, Any]:
             supported=False, action="manual",
         )
     try:
-        import re as _re
-
-        exported = _re.findall(r"^export ([A-Z][A-Z0-9_]*)=", start_sh.read_text(encoding="utf-8"), _re.MULTILINE)
+        exported = re.findall(r"^export ([A-Z][A-Z0-9_]*)=", start_sh.read_text(encoding="utf-8"), re.MULTILINE)
     except OSError as exc:
         return _doctor_check(
             op_policy.STATUS_WARN, "env", "START_SH_UNREADABLE",
@@ -1064,6 +1063,250 @@ def hermes_operator_doctor() -> str:
             layer="operator",
             code="DOCTOR_INTERNAL_ERROR",
             suggested_action="Run hermes_operator_doctor again or check server logs.",
+            trace_id=trace_id,
+        )
+        return json.dumps(envelope, indent=2)
+
+
+# --- Release doctor (read-only release-readiness, issue #9) -----------------
+
+_SECRET_FILE_MARKERS: tuple[str, ...] = op_policy.SECRET_PATH_SUBSTRINGS + (
+    ".env", ".pem",
+)
+
+# Matches the troubleshooting sentence in docs/operator-mode.md so the
+# documented tool count can be verified against the real registry.
+_DOCS_TOOL_COUNT_RE = re.compile(r"full tool count \((\d+)")
+
+
+def _release_check(
+    status: str,
+    code: str,
+    message: str,
+    suggested_action: str,
+    blocking: bool = False,
+    **details: Any,
+) -> dict[str, Any]:
+    check = _doctor_check(status, "release", code, message, suggested_action, **details)
+    if blocking:
+        check["blocking"] = True
+    return check
+
+
+def _release_doctor_impl(full_tests: bool, timeout: int, runner=None) -> dict[str, Any]:
+    repo_root = Path(__file__).resolve().parent
+    run_fn = runner or op_policy.run_argv
+    checks: dict[str, Any] = {}
+
+    rc, out, _err = run_fn(["git", "ls-files"], timeout=30, workdir=str(repo_root))
+    tracked = [line.strip() for line in out.splitlines() if line.strip()] if rc == 0 else []
+
+    # 1. Syntax: in-process compile of every tracked .py (no bytecode writes).
+    syntax_errors: list[str] = []
+    for rel in tracked:
+        if not rel.endswith(".py"):
+            continue
+        try:
+            compile((repo_root / rel).read_text(encoding="utf-8"), rel, "exec")
+        except SyntaxError as exc:
+            syntax_errors.append(f"{rel}:{exc.lineno}")
+        except OSError:
+            syntax_errors.append(rel)
+    if syntax_errors:
+        checks["compile"] = _release_check(
+            op_policy.STATUS_FAIL, "SYNTAX_ERROR",
+            f"Tracked Python files fail to compile: {', '.join(syntax_errors[:10])}.",
+            "Fix the syntax errors before releasing.", blocking=True,
+        )
+    else:
+        checks["compile"] = _release_check(
+            op_policy.STATUS_PASS, "OK",
+            f"All {sum(1 for r in tracked if r.endswith('.py'))} tracked Python files compile.",
+            "No action needed.",
+        )
+
+    # 2. Secret-like tracked filenames (names only; never reads contents).
+    secret_files = [
+        rel for rel in tracked
+        if any(m in rel.rsplit("/", 1)[-1].lower() for m in _SECRET_FILE_MARKERS)
+    ]
+    if secret_files:
+        checks["secret_files"] = _release_check(
+            op_policy.STATUS_FAIL, "SECRET_FILE_DETECTED",
+            f"Tracked files have secret-like names: {', '.join(secret_files[:10])}.",
+            "Remove them from git tracking before releasing.", blocking=True,
+            count=len(secret_files),
+        )
+    else:
+        checks["secret_files"] = _release_check(
+            op_policy.STATUS_PASS, "OK",
+            "No tracked files with secret-like names.", "No action needed.",
+        )
+
+    # 3. Dirty working tree.
+    rc, out, _err = run_fn(["git", "status", "--porcelain"], timeout=30, workdir=str(repo_root))
+    dirty = bool(out.strip()) if rc == 0 else None
+    if dirty:
+        checks["working_tree"] = _release_check(
+            op_policy.STATUS_WARN, "DIRTY_TREE",
+            "The working tree has uncommitted changes.",
+            "Commit or stash before tagging a release.",
+        )
+    elif dirty is None:
+        checks["working_tree"] = _release_check(
+            op_policy.STATUS_WARN, "GIT_UNAVAILABLE",
+            "git status failed; cannot verify the working tree.",
+            "Check that this is a git checkout and git is on PATH.",
+        )
+    else:
+        checks["working_tree"] = _release_check(
+            op_policy.STATUS_PASS, "OK", "Working tree is clean.", "No action needed.",
+        )
+
+    # 4. Version consistency: pyproject version must appear in CHANGELOG.md.
+    version = None
+    match = re.search(
+        r'^version\s*=\s*"([^"]+)"',
+        (repo_root / "pyproject.toml").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ) if (repo_root / "pyproject.toml").is_file() else None
+    version = match.group(1) if match else None
+    changelog = repo_root / "CHANGELOG.md"
+    if version is None:
+        checks["version_changelog"] = _release_check(
+            op_policy.STATUS_FAIL, "VERSION_UNREADABLE",
+            "Could not read version from pyproject.toml.",
+            "Fix pyproject.toml before releasing.", blocking=True,
+        )
+    elif not changelog.is_file() or version not in changelog.read_text(encoding="utf-8"):
+        checks["version_changelog"] = _release_check(
+            op_policy.STATUS_WARN, "CHANGELOG_MISSING_VERSION",
+            f"CHANGELOG.md does not mention version {version}.",
+            "Add a changelog entry for this version.", version=version,
+        )
+    else:
+        checks["version_changelog"] = _release_check(
+            op_policy.STATUS_PASS, "OK",
+            f"CHANGELOG.md mentions version {version}.", "No action needed.",
+            version=version,
+        )
+
+    # 5. Doc drift: the tool count documented in operator-mode.md must match
+    # the real registry (the sentence went stale once already).
+    doc_path = repo_root / "docs" / "operator-mode.md"
+    doc_match = _DOCS_TOOL_COUNT_RE.search(doc_path.read_text(encoding="utf-8")) if doc_path.is_file() else None
+    actual_count = len(REGISTERED_TOOL_NAMES)
+    if doc_match is None:
+        checks["docs_tool_count"] = _release_check(
+            op_policy.STATUS_WARN, "DOC_COUNT_NOT_FOUND",
+            "docs/operator-mode.md no longer states the full tool count.",
+            "Restore the troubleshooting sentence or update this check.",
+        )
+    elif int(doc_match.group(1)) != actual_count:
+        checks["docs_tool_count"] = _release_check(
+            op_policy.STATUS_WARN, "DOC_COUNT_DRIFT",
+            f"docs/operator-mode.md says {doc_match.group(1)} tools; registry has {actual_count}.",
+            "Update the documented tool count.", documented=int(doc_match.group(1)),
+            actual=actual_count,
+        )
+    else:
+        checks["docs_tool_count"] = _release_check(
+            op_policy.STATUS_PASS, "OK",
+            f"Documented tool count matches the registry ({actual_count}).",
+            "No action needed.",
+        )
+
+    # 6. Release posture: releases should be cut from a dry-run posture.
+    policy = op_policy.OperatorPolicy()
+    if policy.apply_mode == "direct" or policy.owner_mode_ready:
+        checks["release_posture"] = _release_check(
+            op_policy.STATUS_WARN, "ELEVATED_POSTURE",
+            "apply_mode=direct or Owner Mode is armed while running release checks.",
+            "Release from the default dry-run posture.",
+        )
+    else:
+        checks["release_posture"] = _release_check(
+            op_policy.STATUS_PASS, "OK",
+            "Operator posture is dry-run/read-only.", "No action needed.",
+        )
+
+    # 7. Optional full test run (opt-in; runs the local pytest suite).
+    if full_tests:
+        try:
+            rc, out, err = run_fn(
+                [sys.executable, "-m", "pytest", "-q"],
+                timeout=max(60, int(timeout)), workdir=str(repo_root),
+            )
+            if rc == 0:
+                checks["tests"] = _release_check(
+                    op_policy.STATUS_PASS, "OK", "pytest suite passed.", "No action needed.",
+                )
+            else:
+                checks["tests"] = _release_check(
+                    op_policy.STATUS_FAIL, "TESTS_FAILED",
+                    f"pytest exited with code {rc}.",
+                    "Fix failing tests before releasing.", blocking=True, returncode=rc,
+                )
+        except Exception as exc:
+            checks["tests"] = _release_check(
+                op_policy.STATUS_FAIL, "TESTS_ERRORED",
+                f"pytest could not run: {op_policy.sanitize_error_message(str(exc))}",
+                "Check the venv and pytest install.", blocking=True,
+            )
+
+    return checks
+
+
+def hermes_release_doctor(full_tests: bool = False, timeout: int = 300) -> str:
+    """Lightweight release-readiness check for the sidecar repo itself.
+
+    Read-only: never mutates the tree, never publishes, never tags. The only
+    subprocesses are read-only git queries and, when ``full_tests=true`` is
+    explicitly requested, the local pytest suite (bounded by ``timeout``).
+    """
+    trace_id = op_policy.new_trace_id()
+    try:
+        checks = _release_doctor_impl(full_tests, timeout)
+
+        failed = [n for n, c in checks.items() if c["status"] == op_policy.STATUS_FAIL]
+        warnings = [n for n, c in checks.items() if c["status"] == op_policy.STATUS_WARN]
+        blocking = [n for n in failed if checks[n].get("blocking")]
+
+        if failed:
+            overall = op_policy.STATUS_FAIL
+            recommended = "Fix the failing checks before tagging a release."
+        elif warnings:
+            overall = op_policy.STATUS_WARN
+            recommended = "Review warnings; then re-run with full_tests=true before tagging."
+        else:
+            overall = op_policy.STATUS_PASS
+            recommended = (
+                "Ready to tag." if full_tests
+                else "Checks pass; run once more with full_tests=true before tagging."
+            )
+
+        return json.dumps(
+            {
+                "success": True,
+                "ok": overall == op_policy.STATUS_PASS,
+                "overall_status": overall,
+                "full_tests": full_tests,
+                "checks": checks,
+                "failed_checks": failed,
+                "blocking_checks": blocking,
+                "warnings": warnings,
+                "recommended_next_action": recommended,
+                "trace_id": trace_id,
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as exc:
+        envelope = op_policy.error_from_exception(
+            exc,
+            layer="release",
+            code="RELEASE_DOCTOR_INTERNAL_ERROR",
+            suggested_action="Run hermes_release_doctor again or check server logs.",
             trace_id=trace_id,
         )
         return json.dumps(envelope, indent=2)
@@ -1529,6 +1772,7 @@ def register_tools(server: FastMCP) -> None:
     add(hermes_operator_status)
     add(hermes_operator_audit_tail)
     add(hermes_operator_doctor)
+    add(hermes_release_doctor)
 
     # Cron
     add(hermes_cron_list)
