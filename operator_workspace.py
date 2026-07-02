@@ -17,9 +17,10 @@ Tools:
 - ``hermes_owner_run_command``     : owner      — arbitrary command (with catastrophic blocks)
 - ``hermes_owner_patch``           : owner      — arbitrary file patch (still denies secret paths)
 - ``hermes_owner_write_file``      : owner      — arbitrary file write (still denies secret paths)
-- ``hermes_owner_repo_issue_create``: owner      — governed recipe: dry-run plan for a public-safe
-  GitHub issue (see docs/owner-mode-governance.md, docs/public-issue-sanitization.md).
-  Phase 4A: dry-run plan only, no ``gh issue create`` execution yet.
+- ``hermes_owner_repo_issue_create``: owner      — governed recipe: public-safe GitHub issue
+  creation via ``gh`` (see docs/owner-mode-governance.md, docs/public-issue-sanitization.md).
+  Dry-run by default; direct creation requires the same apply_mode=direct +
+  dry_run=false gate as the raw owner primitives.
 
 Safety rules:
 - No shell=True anywhere. Ever.
@@ -41,6 +42,7 @@ import os
 import re
 import shlex
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -1548,13 +1550,15 @@ def hermes_owner_write_file(
 
 
 # ---------------------------------------------------------------------------
-# Governed Owner recipe: public-safe GitHub issue creation (Phase 4A)
+# Governed Owner recipe: public-safe GitHub issue creation
 #
 # Unlike the raw owner primitives above, this recipe is scope-restricted: the
 # workdir must be a real git repository under RANDOKU_OPERATOR_ALLOWED_PATHS,
-# and the issue body is always sanitized before it appears in output or
-# audit. Phase 4A only produces a reviewable dry-run plan; it never invokes
-# ``gh issue create``. Direct execution is Phase 4B, not implemented here.
+# and the issue body is always sanitized before it appears in output, on
+# disk, or in the audit log. Direct creation (dry_run=false while
+# apply_mode=direct) writes the sanitized body to a short-lived temp file,
+# passes it to `gh issue create --body-file`, and deletes it immediately
+# after — the raw or sanitized body is never passed as an argv value.
 # ---------------------------------------------------------------------------
 
 _ISSUE_CREATE_RECIPE = "repo_issue_create"
@@ -1596,8 +1600,8 @@ def _sanitize_public_issue_body(
 ) -> tuple[str, dict[str, Any]]:
     """Deterministically strip local/private details from an issue body.
 
-    Runs unconditionally (Phase 4A: always sanitize, regardless of repo
-    visibility — simpler and safer than trusting visibility detection).
+    Runs unconditionally, regardless of repo visibility — simpler and safer
+    than trusting visibility detection.
 
     Redaction order, most sensitive first, so nothing partially redacted
     leaks a prefix/suffix fragment of something more sensitive:
@@ -1689,17 +1693,6 @@ def hermes_owner_repo_issue_create(
             raise ValueError("body is required.")
         label_list = list(labels) if labels else []
 
-        if not policy.effective_dry_run(dry_run):
-            # Phase 4A ships preflight + sanitized dry-run plans only. A
-            # direct request only reaches here when apply_mode=direct AND
-            # dry_run=false (effective_dry_run already downgrades every
-            # other combination to a plan, matching the other owner tools).
-            raise PermissionError(
-                "Direct issue creation is not implemented in Phase 4A. "
-                "Only dry-run plans are supported for hermes_owner_repo_issue_create; "
-                "call with dry_run=true (or leave apply_mode=dry_run) to preview."
-            )
-
         # Governed recipes are stricter than raw owner primitives: workdir
         # is required and must be a real, allowed, non-secret git repo.
         if not workdir:
@@ -1745,18 +1738,7 @@ def hermes_owner_repo_issue_create(
         )
         body_len, body_sha256 = op._hash_secret_text(sanitized_body)
 
-        would_run = [
-            "gh", "issue", "create",
-            "--repo", repo_name,
-            "--title", title,
-            "--body-file", "<tempfile>",
-        ]
-        if label_list:
-            would_run += ["--label", ",".join(label_list)]
-
-        plan = {
-            "success": True,
-            "dry_run": True,
+        base_fields = {
             "recipe": _ISSUE_CREATE_RECIPE,
             "repo": repo_name,
             "repo_url": repo_url,
@@ -1768,30 +1750,124 @@ def hermes_owner_repo_issue_create(
             "body_len": body_len,
             "body_sha256": body_sha256,
             "body_preview": sanitized_body[:280],
-            "would_run": would_run,
-            "requires_user_review": True,
-            "direct_supported": False,
+        }
+        audit_extra = {
+            "recipe": _ISSUE_CREATE_RECIPE,
+            "repo": repo_name,
+            "visibility": visibility,
+            "title": title,
+            "labels": label_list,
+            "sanitization": sanitization,
         }
 
+        if policy.effective_dry_run(dry_run):
+            would_run = [
+                "gh", "issue", "create",
+                "--repo", repo_name,
+                "--title", title,
+                "--body-file", "<tempfile>",
+            ]
+            if label_list:
+                would_run += ["--label", ",".join(label_list)]
+
+            plan = {
+                "success": True,
+                "dry_run": True,
+                **base_fields,
+                "would_run": would_run,
+                "requires_user_review": True,
+                "direct_supported": True,
+            }
+            op.audit_record(
+                tool="hermes_owner_repo_issue_create",
+                level=policy.level,
+                apply_mode=policy.apply_mode,
+                dry_run=True,
+                success=True,
+                changed=False,
+                summary=f"dry-run plan repo={repo_name} visibility={visibility}",
+                content=sanitized_body,
+                extra=audit_extra,
+            )
+            return json.dumps(plan, indent=2)
+
+        # Direct creation: apply_mode=direct and dry_run=false have both
+        # been confirmed by effective_dry_run above (Owner Mode direct
+        # mutation gate, same as the raw owner primitives).
+        policy.require_mutation(dry_run)
+
+        # Only the sanitized body is ever written to disk, and only for the
+        # lifetime of the gh call — deleted in `finally` even on failure.
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", prefix="randoku-owner-issue-",
+                delete=False, encoding="utf-8",
+            ) as tmp:
+                tmp.write(sanitized_body)
+                tmp_path = tmp.name
+
+            real_argv = [
+                "gh", "issue", "create",
+                "--repo", repo_name,
+                "--title", title,
+                "--body-file", tmp_path,
+            ]
+            if label_list:
+                real_argv += ["--label", ",".join(label_list)]
+
+            rc, out, err = run_fn(real_argv, timeout=60, workdir=workdir_text)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        # `gh issue create` prints the created issue's URL as the last
+        # non-empty line of stdout on success.
+        issue_url = ""
+        if rc == 0 and out:
+            lines = [line.strip() for line in out.splitlines() if line.strip()]
+            issue_url = lines[-1] if lines else ""
+        issue_number = None
+        if issue_url:
+            tail = issue_url.rstrip("/").rsplit("/", 1)[-1]
+            if tail.isdigit():
+                issue_number = int(tail)
+
+        result = {
+            "success": rc == 0,
+            "dry_run": False,
+            **base_fields,
+            # Placeholder, not the real (already-deleted) temp path — keeps
+            # the shape consistent with the dry-run plan's `would_run`.
+            "argv": [
+                "gh", "issue", "create",
+                "--repo", repo_name,
+                "--title", title,
+                "--body-file", "<tempfile>",
+                *(["--label", ",".join(label_list)] if label_list else []),
+            ],
+            "returncode": rc,
+            "issue_url": issue_url,
+            "issue_number": issue_number,
+            "stdout": op.redact_output(out),
+            "stderr": op.redact_output(err),
+        }
         op.audit_record(
             tool="hermes_owner_repo_issue_create",
             level=policy.level,
             apply_mode=policy.apply_mode,
-            dry_run=True,
-            success=True,
-            changed=False,
-            summary=f"dry-run plan repo={repo_name} visibility={visibility}",
+            dry_run=False,
+            success=rc == 0,
+            changed=rc == 0,
+            summary=f"rc={rc} repo={repo_name} issue_url={issue_url}",
             content=sanitized_body,
-            extra={
-                "recipe": _ISSUE_CREATE_RECIPE,
-                "repo": repo_name,
-                "visibility": visibility,
-                "title": title,
-                "labels": label_list,
-                "sanitization": sanitization,
-            },
+            error=op.redact_output(err) if rc != 0 else "",
+            extra={**audit_extra, "issue_url": issue_url, "returncode": rc},
         )
-        return json.dumps(plan, indent=2)
+        return json.dumps(result, indent=2)
     except Exception as exc:
         op.audit_record(
             tool="hermes_owner_repo_issue_create",

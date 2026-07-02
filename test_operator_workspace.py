@@ -793,14 +793,27 @@ def test_owner_run_command_is_denylist_based_for_non_dangerous_command(
     assert parsed["argv"] == ["whoami"]
 
 
-# --- Owner Mode: hermes_owner_repo_issue_create (Phase 4A, dry-run only) --
+# --- Owner Mode: hermes_owner_repo_issue_create -------------------------
 #
 # Governed recipe: preflights via git/gh through a fake runner, always
-# sanitizes the body, and only ever returns a dry-run plan in this phase.
-# No test here invokes real `gh` or performs an external write.
+# sanitizes the body, and only executes `gh issue create` when apply_mode
+# is direct AND dry_run=false (same gate as the raw owner primitives).
+# No test here invokes real `gh` or performs an external write — the
+# `runner` fake stands in for the subprocess call everywhere.
 
 
-def _gh_runner(*, repo_root, git_rc=0, gh_auth_rc=0, gh_repo_rc=0, gh_repo_json=None, calls=None):
+def _gh_runner(
+    *,
+    repo_root,
+    git_rc=0,
+    gh_auth_rc=0,
+    gh_repo_rc=0,
+    gh_repo_json=None,
+    gh_issue_create_rc=0,
+    gh_issue_create_url="https://github.com/irandoku/randoku-sidecar/issues/42",
+    body_files=None,
+    calls=None,
+):
     if gh_repo_json is None:
         gh_repo_json = {
             "nameWithOwner": "irandoku/randoku-sidecar",
@@ -823,6 +836,13 @@ def _gh_runner(*, repo_root, git_rc=0, gh_auth_rc=0, gh_repo_rc=0, gh_repo_json=
             if gh_repo_json == "INVALID_JSON":
                 return (0, "not json", "")
             return (0, json.dumps(gh_repo_json), "")
+        if argv[:3] == ["gh", "issue", "create"]:
+            body_file_path = argv[argv.index("--body-file") + 1]
+            if body_files is not None:
+                body_files.append(Path(body_file_path).read_text(encoding="utf-8"))
+            if gh_issue_create_rc != 0:
+                return (gh_issue_create_rc, "", "gh issue create failed")
+            return (0, f"{gh_issue_create_url}\n", "")
         return (1, "", f"unexpected command: {argv}")
 
     return runner
@@ -883,10 +903,13 @@ def test_owner_repo_issue_create_refuses_non_git_workdir(
     assert "git repository" in parsed["error"].lower()
 
 
-def test_owner_repo_issue_create_refuses_direct_execution_in_phase_4a(
+def test_owner_repo_issue_create_direct_downgrades_to_dry_run_when_apply_mode_is_dry_run(
     workspace_tree, clean_env, audit_override, monkeypatch
 ):
-    _enable_owner(monkeypatch, direct=True)
+    """Same downgrade contract as the raw owner primitives: apply_mode is
+    the real gate. dry_run=false with apply_mode=dry_run must still only
+    preview, never touch gh."""
+    _enable_owner(monkeypatch, direct=False)
     monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
     calls = []
     runner = _gh_runner(repo_root=workspace_tree, calls=calls)
@@ -894,9 +917,100 @@ def test_owner_repo_issue_create_refuses_direct_execution_in_phase_4a(
         workdir=str(workspace_tree), title="t", body="b", dry_run=False, runner=runner,
     )
     parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is True
+    assert not any(c[:3] == ["gh", "issue", "create"] for c in calls)
+
+
+def test_owner_repo_issue_create_direct_creates_issue_and_cleans_up_temp_file(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    calls = []
+    body_files = []
+    runner = _gh_runner(
+        repo_root=workspace_tree,
+        gh_issue_create_url="https://github.com/irandoku/randoku-sidecar/issues/42",
+        body_files=body_files,
+        calls=calls,
+    )
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree),
+        title="Bug: recall returns empty",
+        body="Plain public-safe description, no local details.",
+        labels=["bug", "owner-mode"],
+        dry_run=False,
+        runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is False
+    assert parsed["issue_url"] == "https://github.com/irandoku/randoku-sidecar/issues/42"
+    assert parsed["issue_number"] == 42
+    assert parsed["argv"] == [
+        "gh", "issue", "create",
+        "--repo", "irandoku/randoku-sidecar",
+        "--title", "Bug: recall returns empty",
+        "--body-file", "<tempfile>",
+        "--label", "bug,owner-mode",
+    ]
+
+    create_call = next(c for c in calls if c[:3] == ["gh", "issue", "create"])
+    body_file_path = create_call[create_call.index("--body-file") + 1]
+    assert body_file_path != "<tempfile>"
+    assert not Path(body_file_path).exists(), "temp body file must be deleted after the gh call"
+    assert body_files == ["Plain public-safe description, no local details."]
+
+
+def test_owner_repo_issue_create_direct_writes_sanitized_body_to_temp_file(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    body_files = []
+    runner = _gh_runner(repo_root=workspace_tree, body_files=body_files)
+    body = "Repro needs ~/.ssh/id_ed25519 and a .env file with a token in it."
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=body, dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert len(body_files) == 1
+    assert "id_ed25519" not in body_files[0]
+    assert ".env" not in body_files[0]
+    assert "<secret-like-path>" in body_files[0]
+
+
+def test_owner_repo_issue_create_direct_reports_gh_failure(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, gh_issue_create_rc=1)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
     assert parsed["success"] is False
-    assert "phase 4a" in parsed["error"].lower()
-    assert calls == [], "no preflight or gh command should run for an unsupported direct request"
+    assert parsed["returncode"] == 1
+    assert parsed["issue_url"] == ""
+
+
+def test_owner_repo_issue_create_direct_audit_omits_raw_body(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    raw_body = f"private note: my vault lives at {workspace_tree}/notes and token=abc123secretvalue"
+    ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=raw_body, dry_run=False, runner=runner,
+    )
+    audit_text = audit_override.read_text(encoding="utf-8")
+    assert raw_body not in audit_text
+    assert "abc123secretvalue" not in audit_text
+    assert "content_sha256" in audit_text
 
 
 def test_owner_repo_issue_create_dry_run_returns_public_safe_plan(
@@ -921,7 +1035,7 @@ def test_owner_repo_issue_create_dry_run_returns_public_safe_plan(
     assert parsed["visibility"] == "PUBLIC"
     assert parsed["labels"] == ["bug", "owner-mode"]
     assert parsed["requires_user_review"] is True
-    assert parsed["direct_supported"] is False
+    assert parsed["direct_supported"] is True
     assert "sanitization" in parsed and parsed["sanitization"]["enabled"] is True
 
 

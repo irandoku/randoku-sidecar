@@ -5,11 +5,12 @@ This document is a companion to
 the contract a GitHub-issue-creation recipe (or any recipe that writes to a
 public external system) must satisfy.
 
-As of Phase 4A, `hermes_owner_repo_issue_create` implements this contract
-for **dry-run plans only** — preflight (`git rev-parse`, `gh auth status`,
-`gh repo view`), unconditional sanitization, and a reviewable plan shape.
-It does not call `gh issue create`; direct execution is Phase 4B and is not
-implemented — see the constraint list at the bottom of this document.
+`hermes_owner_repo_issue_create` implements this contract end to end:
+preflight (`git rev-parse`, `gh auth status`, `gh repo view`), unconditional
+sanitization, a reviewable dry-run plan, and — when `apply_mode=direct` and
+`dry_run=false` — direct creation via `gh issue create --body-file`. See the
+scope list at the bottom of this document for what direct creation still
+does *not* cover.
 
 ## Problem
 
@@ -63,33 +64,36 @@ they describe the project's own public source, not the local environment:
 
 `hermes_owner_repo_issue_create` (built directly on `git`/`gh` via the same
 `runner` pattern as the owner primitives, not on `hermes_owner_run_command`)
-must:
+satisfies all of the following:
 
 1. Distinguish private analysis input from the public issue body as two
    separate values — never pass raw analysis straight through as the body.
 2. Sanitize the public issue body **before** the dry-run step, not after.
 3. Show the sanitized preview in dry-run output, so the human reviews
    exactly what will be published, not the pre-sanitization draft.
-4. Use `--body-file` (a temp file passed to `gh issue create --body-file`),
-   never raw body text in argv — argv can leak through process listings and
-   shell history in a way a temp file does not.
+4. Use `--body-file`, never raw body text in argv — argv can leak through
+   process listings and shell history in a way a temp file does not. Direct
+   creation writes the sanitized body to a `tempfile.NamedTemporaryFile`,
+   passes its path to `gh issue create --body-file`, and deletes it in a
+   `finally` block immediately after the call, success or failure.
 5. Audit only body length and a SHA-256 hash, plus a structured
    sanitization summary (e.g. counts of paths/usernames/vault-refs
    replaced) — never the raw body text, consistent with the existing audit
-   policy in `docs/operator-mode.md` (§ "Audit logs").
-6. Require human review before direct (non-dry-run) creation, same as any
-   other Owner direct mutation (`docs/owner-mode-governance.md` §4, §8).
+   policy in `docs/operator-mode.md` (§ "Audit logs"). The returned
+   `argv`/`would_run` fields also always show a `<tempfile>` placeholder,
+   never the real (already-deleted) path.
+6. Require human review before direct (non-dry-run) creation: direct
+   creation uses the exact same gate as every other Owner direct mutation
+   (`apply_mode=direct` + `dry_run=false`; `docs/owner-mode-governance.md`
+   §4, §8) — there is no separate confirmation step beyond that, by design,
+   since the dry-run plan is what the human is expected to review before
+   flipping `dry_run` to `false`.
 
-## Explicit non-goals of Phase 4A
+## Scope
 
-- Direct issue creation (an actual `gh issue create` call) is **not
-  implemented**. `hermes_owner_repo_issue_create` refuses direct execution
-  with an explicit "not implemented in Phase 4A" message even when
-  `dry_run=false` and `apply_mode=direct`; see
-  `docs/owner-mode-governance.md` §9.
 - PR creation, git push, release/publish operations, a generic GitHub
-  toolbox, and arbitrary `gh` command execution are out of scope.
-- Owner Mode is **not enabled** as part of this work.
-- No `gh issue create` (or any other external write) is executed as part of
-  this work — all tests fake the `runner` and never invoke real `git`/`gh`
-  network calls.
+  toolbox, and arbitrary `gh` command execution remain out of scope — this
+  recipe only ever runs `git rev-parse`, `gh auth status`, `gh repo view`,
+  and `gh issue create`.
+- Tests never invoke real `gh`/`git`; every test fakes the `runner`
+  parameter, so no test in this repository performs an external write.

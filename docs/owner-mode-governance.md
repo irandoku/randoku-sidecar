@@ -105,11 +105,13 @@ again, because that's where sanitization logic belongs (see §7) rather than
 being re-derived by the model each time from raw analysis.
 
 The first governed recipe, `hermes_owner_repo_issue_create` (GitHub issue
-creation), exists in dry-run-only form as of Phase 4A: it preflights the
-target repo via `git`/`gh`, always sanitizes the body, and returns a
-reviewable plan — it does not yet call `gh issue create`. Direct execution
-is Phase 4B and is not implemented. See
-[`docs/public-issue-sanitization.md`](public-issue-sanitization.md) for the
+creation), is fully implemented: it preflights the target repo via
+`git`/`gh`, always sanitizes the body, and returns a reviewable dry-run plan
+by default. Direct creation (`apply_mode=direct` + `dry_run=false`, the same
+gate as the raw owner primitives) writes the sanitized body to a short-lived
+temp file, calls `gh issue create --body-file`, and deletes the temp file
+immediately after — the raw body is never passed as an argv value or
+logged. See [`docs/public-issue-sanitization.md`](public-issue-sanitization.md) for the
 sanitization contract this recipe follows.
 
 ## 6. Public or external output has a different safety boundary
