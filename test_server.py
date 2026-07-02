@@ -100,6 +100,38 @@ def test_default_tool_surface_is_read_or_local_metadata_only(monkeypatch):
         assert tool.meta == {"securitySchemes": [{"type": "noauth"}]}
 
 
+def test_operator_status_tool_list_matches_real_registry(monkeypatch):
+    """registered_operator_tools must be derived from the actual registration,
+    not a hand-maintained list that can drift (issue #6)."""
+    clear_gate_envs(monkeypatch)
+
+    built = server.build_server()
+    status = json.loads(server.hermes_operator_status())
+
+    assert status["registered_operator_tools"] == tool_names(built)
+    # Tools the old hardcoded list had drifted away from.
+    for present in [
+        "hermes_workspace_apply_diff",
+        "hermes_memory_provider_writeback",
+        "hermes_memory_provider_read",
+        "hermes_external_context_recall",
+        "hermes_codegraph_status",
+        "hermes_codegraph_search",
+    ]:
+        assert present in status["registered_operator_tools"]
+
+
+def test_operator_status_tool_list_tracks_env_gates(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.ENABLE_WRITE_ENV, "1")
+
+    built = server.build_server()
+    status = json.loads(server.hermes_operator_status())
+
+    assert status["registered_operator_tools"] == tool_names(built)
+    assert "hermes_write_file" in status["registered_operator_tools"]
+
+
 def test_env_gates_expose_high_risk_tools(monkeypatch):
     clear_gate_envs(monkeypatch)
     monkeypatch.setenv(server.ENABLE_WRITE_ENV, "1")
