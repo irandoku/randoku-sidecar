@@ -792,6 +792,283 @@ def hermes_operator_audit_tail(limit: int = 20) -> str:
         return json.dumps({"success": False, "error": str(exc)}, indent=2)
 
 
+# --- Operator doctor (read-only diagnostics, issue #8) ---------------------
+
+# Set by main() once the transport is chosen; "unknown" when imported (tests,
+# tooling) rather than served.
+RUNNING_TRANSPORT = "unknown"
+
+# Tools that only appear when an env gate is set; their presence is worth a
+# WARN in the doctor because it means an elevated surface is exposed.
+_HIGH_RISK_TOOLS = ("hermes_write_file", "hermes_patch", "hermes_run_command")
+
+
+def _doctor_check(
+    status: str,
+    layer: str,
+    code: str,
+    message: str,
+    suggested_action: str,
+    **details: Any,
+) -> dict[str, Any]:
+    check: dict[str, Any] = {
+        "status": status,
+        "layer": layer,
+        "code": code,
+        "message": message,
+        "suggested_action": suggested_action,
+    }
+    if details:
+        check["details"] = details
+    return check
+
+
+def _check_runtime_imports() -> dict[str, Any]:
+    if IMPORT_ERROR:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "system", "HERMES_IMPORTS_UNAVAILABLE",
+            f"Hermes imports unavailable: {op_policy.sanitize_error_message(IMPORT_ERROR)}",
+            "Hermes-backed tools (read/memory/skills) will refuse; check the hermes-agent install.",
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "system", "OK",
+        "Hermes imports are available.", "No action needed.",
+    )
+
+
+def _check_operator_policy_posture() -> dict[str, Any]:
+    policy = op_policy.OperatorPolicy()
+    details = {
+        "enabled": policy.enabled,
+        "level": policy.level,
+        "apply_mode": policy.apply_mode,
+        "owner_mode_ready": policy.owner_mode_ready,
+    }
+    if policy.owner_mode_ready:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "policy", "STANDING_OWNER_POSTURE",
+            "Owner Mode is fully armed (level=owner + ack).",
+            "Owner Mode should be temporary; drop level/ack when the owner task is done.",
+            **details,
+        )
+    if policy.apply_mode == "direct":
+        return _doctor_check(
+            op_policy.STATUS_WARN, "policy", "DIRECT_APPLY_MODE",
+            "apply_mode=direct: mutating calls with dry_run=false will execute.",
+            "Prefer dry_run as the standing posture; use direct only while applying a change.",
+            **details,
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "policy", "OK",
+        f"Operator posture: enabled={policy.enabled}, level={policy.level}, dry-run first.",
+        "No action needed.",
+        **details,
+    )
+
+
+def _check_registered_tools() -> dict[str, Any]:
+    names = sorted(REGISTERED_TOOL_NAMES)
+    if not names:
+        return _doctor_check(
+            op_policy.STATUS_FAIL, "operator", "NO_TOOLS_REGISTERED",
+            "No tools recorded; register_tools() has not run in this process.",
+            "This indicates a broken server build; check server startup logs.",
+        )
+    exposed = [t for t in _HIGH_RISK_TOOLS if t in names]
+    if exposed:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "operator", "HIGH_RISK_TOOLS_EXPOSED",
+            f"Env-gated high-risk tools are registered: {', '.join(exposed)}.",
+            "Unset the RANDOKU_ENABLE_* gates unless this surface is intentional.",
+            count=len(names), high_risk=exposed,
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "operator", "OK",
+        f"{len(names)} tools registered; no env-gated high-risk tools exposed.",
+        "No action needed.",
+        count=len(names),
+    )
+
+
+def _check_memory_provider_posture() -> dict[str, Any]:
+    writeback = sorted(op_memory.writeback_allowlist())
+    read = sorted(op_memory.read_allowlist())
+    details = {"writeback_tools": writeback, "read_tools": read}
+    if not writeback and not read:
+        return _doctor_check(
+            op_policy.STATUS_PASS, "memory", "PROVIDER_DISABLED",
+            "No provider tools allowlisted; memory provider read/writeback is off.",
+            f"Set {op_memory.WRITEBACK_ALLOWLIST_ENV} / {op_memory.READ_ALLOWLIST_ENV} to enable.",
+            **details,
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "memory", "OK",
+        f"Provider allowlists: writeback={writeback or 'off'}, read={read or 'off'}.",
+        "No action needed.",
+        **details,
+    )
+
+
+def _check_session_search() -> dict[str, Any]:
+    enabled = env_enabled(ENABLE_SESSION_SEARCH_ENV)
+    if not enabled:
+        return _doctor_check(
+            op_policy.STATUS_PASS, "session", "DISABLED",
+            "Session search tools are not registered (default).",
+            f"Set {ENABLE_SESSION_SEARCH_ENV}=1 to expose them.",
+        )
+    if SessionDB is None:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "session", "SESSION_DB_UNAVAILABLE",
+            "Session search is enabled but the SessionDB import failed.",
+            "Session tools will refuse at call time; check the hermes-agent install.",
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "session", "OK",
+        "Session search is enabled and SessionDB is importable.",
+        "No action needed.",
+    )
+
+
+def _check_codegraph() -> dict[str, Any]:
+    import shutil
+
+    repo_root = Path(__file__).resolve().parent
+    index_exists = (repo_root / ".codegraph").is_dir()
+    cli = shutil.which("codegraph") is not None
+    details = {"index_exists": index_exists, "cli_on_path": cli}
+    if index_exists and not cli:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "codegraph", "CLI_MISSING",
+            "A .codegraph index exists for the sidecar repo but the codegraph CLI is not on PATH.",
+            "Codegraph tools will fail; install the CLI or fix PATH for this process.",
+            **details,
+        )
+    if not index_exists:
+        return _doctor_check(
+            op_policy.STATUS_PASS, "codegraph", "NOT_INDEXED",
+            "The sidecar repo has no .codegraph index (indexing is optional).",
+            "Run 'codegraph index' in the repo if codegraph tools should work on it.",
+            **details,
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "codegraph", "OK",
+        "Codegraph index and CLI are both available.",
+        "No action needed.",
+        **details,
+    )
+
+
+def _check_env_parity() -> dict[str, Any]:
+    """Names-only comparison of env vars start.sh exports vs this process.
+
+    The stdio MCP process and the HTTP/tunnel process (start.sh) have
+    independent environments; behaviour differences between Claude Code and
+    ChatGPT usually trace back to exactly this. Never compares values.
+    """
+    start_sh = Path(__file__).resolve().parent / "start.sh"
+    if not start_sh.is_file():
+        return _doctor_check(
+            op_policy.STATUS_UNSUPPORTED, "env", "NO_START_SH",
+            "start.sh not found; cannot derive the tunnel process env for comparison.",
+            "Compare the two process environments manually.",
+            supported=False, action="manual",
+        )
+    try:
+        import re as _re
+
+        exported = _re.findall(r"^export ([A-Z][A-Z0-9_]*)=", start_sh.read_text(encoding="utf-8"), _re.MULTILINE)
+    except OSError as exc:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "env", "START_SH_UNREADABLE",
+            f"start.sh could not be read: {op_policy.sanitize_error_message(str(exc))}",
+            "Check file permissions on start.sh.",
+        )
+    missing_here = sorted(name for name in exported if name not in os.environ)
+    if missing_here:
+        return _doctor_check(
+            op_policy.STATUS_WARN, "env", "ENV_PARITY_DIVERGENCE",
+            f"start.sh exports {len(exported)} var(s); {len(missing_here)} unset in this process: "
+            f"{', '.join(missing_here)}.",
+            "If behaviour differs between the stdio and tunnel deployments, align these first.",
+            exported_count=len(exported), missing_in_this_process=missing_here,
+        )
+    return _doctor_check(
+        op_policy.STATUS_PASS, "env", "OK",
+        f"All {len(exported)} var(s) exported by start.sh are set in this process.",
+        "No action needed.",
+        exported_count=len(exported),
+    )
+
+
+def hermes_operator_doctor() -> str:
+    """Read-only health check across randoku-sidecar's own surfaces.
+
+    Never mutates state, never runs subprocesses, never reports secret
+    values or absolute local paths.
+    """
+    trace_id = op_policy.new_trace_id()
+    try:
+        checks: dict[str, Any] = {}
+        for name, fn in (
+            ("runtime_imports", _check_runtime_imports),
+            ("operator_policy", _check_operator_policy_posture),
+            ("registered_tools", _check_registered_tools),
+            ("memory_provider", _check_memory_provider_posture),
+            ("session_search", _check_session_search),
+            ("codegraph", _check_codegraph),
+            ("env_parity", _check_env_parity),
+        ):
+            try:
+                checks[name] = fn()
+            except Exception as exc:
+                checks[name] = _doctor_check(
+                    op_policy.STATUS_FAIL, "operator", "CHECK_CRASHED",
+                    f"{name} check raised: {op_policy.sanitize_error_message(str(exc))}",
+                    "Report this; a doctor check should never raise.",
+                )
+
+        failed = [n for n, c in checks.items() if c["status"] == op_policy.STATUS_FAIL]
+        warnings = [n for n, c in checks.items() if c["status"] == op_policy.STATUS_WARN]
+        unsupported = [n for n, c in checks.items() if c["status"] == op_policy.STATUS_UNSUPPORTED]
+
+        if failed:
+            overall = op_policy.STATUS_FAIL
+            recommended = "Review failed checks; each carries its own suggested_action."
+        elif warnings:
+            overall = op_policy.STATUS_WARN
+            recommended = "Review warnings; they usually indicate posture, not breakage."
+        else:
+            overall = op_policy.STATUS_PASS
+            recommended = "No action needed."
+
+        return json.dumps(
+            {
+                "success": True,
+                "ok": overall == op_policy.STATUS_PASS,
+                "overall_status": overall,
+                "transport": RUNNING_TRANSPORT,
+                "checks": checks,
+                "failed_checks": failed,
+                "warnings": warnings,
+                "unsupported": unsupported,
+                "recommended_next_action": recommended,
+                "trace_id": trace_id,
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as exc:
+        envelope = op_policy.error_from_exception(
+            exc,
+            layer="operator",
+            code="DOCTOR_INTERNAL_ERROR",
+            suggested_action="Run hermes_operator_doctor again or check server logs.",
+            trace_id=trace_id,
+        )
+        return json.dumps(envelope, indent=2)
+
+
 # --- Cron wrappers (pass hermes_root through) ----------------------------
 
 
@@ -1251,6 +1528,7 @@ def register_tools(server: FastMCP) -> None:
     add(hermes_operator_policy)
     add(hermes_operator_status)
     add(hermes_operator_audit_tail)
+    add(hermes_operator_doctor)
 
     # Cron
     add(hermes_cron_list)
@@ -1348,6 +1626,8 @@ def main() -> None:
         eprint("WARNING: remote no-auth mode is explicitly unsafe and intended only for temporary experiments.")
 
     transport = "streamable-http" if args.http else "sse" if args.sse else "stdio"
+    global RUNNING_TRANSPORT
+    RUNNING_TRANSPORT = transport
     server = build_server(host=args.host, port=args.port, http=args.http)
     if transport == "stdio":
         eprint("randoku-sidecar MCP server starting in stdio mode.")

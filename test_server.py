@@ -388,3 +388,112 @@ def test_http_initialize_smoke(monkeypatch):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# hermes_operator_doctor (issue #8)
+# ---------------------------------------------------------------------------
+
+DOCTOR_CHECKS = [
+    "runtime_imports",
+    "operator_policy",
+    "registered_tools",
+    "memory_provider",
+    "session_search",
+    "codegraph",
+    "env_parity",
+]
+
+
+def test_operator_doctor_report_shape(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+
+    report = json.loads(server.hermes_operator_doctor())
+
+    assert report["success"] is True
+    assert report["overall_status"] in ("PASS", "WARN", "FAIL")
+    assert report["transport"] == "unknown"  # not served via main() in tests
+    assert len(report["trace_id"]) == 16
+    assert sorted(report["checks"]) == sorted(DOCTOR_CHECKS)
+    for check in report["checks"].values():
+        assert check["status"] in ("PASS", "WARN", "FAIL", "UNSUPPORTED")
+        for field in ("layer", "code", "message", "suggested_action"):
+            assert check[field]
+
+
+def test_operator_doctor_never_leaks_home_path(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+
+    raw = server.hermes_operator_doctor()
+    assert str(Path.home()) not in raw
+
+
+def test_operator_doctor_warns_on_direct_apply_mode(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.op_policy.OPERATOR_ENABLED_ENV, "1")
+    monkeypatch.setenv(server.op_policy.OPERATOR_LEVEL_ENV, "workspace")
+    monkeypatch.setenv(server.op_policy.OPERATOR_APPLY_MODE_ENV, "direct")
+    server.build_server()
+
+    report = json.loads(server.hermes_operator_doctor())
+
+    assert report["checks"]["operator_policy"]["status"] == "WARN"
+    assert report["checks"]["operator_policy"]["code"] == "DIRECT_APPLY_MODE"
+    assert "operator_policy" in report["warnings"]
+    assert report["overall_status"] in ("WARN", "FAIL")
+
+
+def test_operator_doctor_warns_on_high_risk_tools(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.ENABLE_WRITE_ENV, "1")
+    server.build_server()
+
+    check = json.loads(server.hermes_operator_doctor())["checks"]["registered_tools"]
+    assert check["status"] == "WARN"
+    assert check["code"] == "HIGH_RISK_TOOLS_EXPOSED"
+    assert "hermes_write_file" in check["details"]["high_risk"]
+
+
+def test_operator_doctor_fails_when_no_tools_registered(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setattr(server, "REGISTERED_TOOL_NAMES", [])
+
+    report = json.loads(server.hermes_operator_doctor())
+
+    assert report["checks"]["registered_tools"]["status"] == "FAIL"
+    assert report["overall_status"] == "FAIL"
+    assert report["ok"] is False
+
+
+def test_operator_doctor_env_parity_unsupported_without_start_sh(monkeypatch, tmp_path):
+    clear_gate_envs(monkeypatch)
+    server.build_server()
+    # Point the module's __file__ at a directory with no start.sh.
+    monkeypatch.setattr(server, "__file__", str(tmp_path / "server.py"))
+
+    report = json.loads(server.hermes_operator_doctor())
+
+    check = report["checks"]["env_parity"]
+    assert check["status"] == "UNSUPPORTED"
+    assert check["details"]["action"] == "manual"
+    assert "env_parity" in report["unsupported"]
+
+
+def test_operator_doctor_env_parity_reports_names_only(monkeypatch):
+    clear_gate_envs(monkeypatch)  # operator envs unset -> divergence vs start.sh
+    server.build_server()
+
+    check = json.loads(server.hermes_operator_doctor())["checks"]["env_parity"]
+    assert check["status"] in ("PASS", "WARN")
+    if check["status"] == "WARN":
+        assert check["code"] == "ENV_PARITY_DIVERGENCE"
+        # Names only, never values.
+        for name in check["details"]["missing_in_this_process"]:
+            assert "=" not in name
+
+
+def test_operator_doctor_is_registered(monkeypatch):
+    clear_gate_envs(monkeypatch)
+    assert "hermes_operator_doctor" in tool_names(server.build_server())

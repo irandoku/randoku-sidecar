@@ -24,6 +24,7 @@ Default posture should stay `dry_run` for always-on hosted/remote use. Local std
 4. Call:
    - `hermes_operator_policy`
    - `hermes_operator_status`
+   - `hermes_operator_doctor`
    - `hermes_cron_list`
 5. Only switch to direct mode when you are doing a deliberate maintenance session.
 
@@ -337,6 +338,34 @@ far: `hermes_owner_repo_issue_create` failures and `hermes_operator_policy`;
 remaining raw `{"success": false, "error": ...}` responses migrate in later
 issues.
 
+## Operator doctor
+
+`hermes_operator_doctor` is a read-only health check across the sidecar's own
+surfaces. It never mutates state, never runs subprocesses, and never reports
+secret values or absolute local paths. Each check returns `{status, layer,
+code, message, suggested_action}` using the vocabulary above, rolled up into
+an `overall_status`.
+
+Current checks:
+
+- `runtime_imports` — are Hermes-backed imports available
+- `operator_policy` — posture; WARNs on standing `apply_mode=direct` or a
+  fully armed Owner Mode
+- `registered_tools` — derived from the real registry; WARNs when env-gated
+  high-risk tools (`hermes_write_file`, `hermes_patch`, `hermes_run_command`)
+  are exposed
+- `memory_provider` — read/writeback allowlist posture (names only)
+- `session_search` — gate + SessionDB importability
+- `codegraph` — index presence and CLI availability for the sidecar repo
+- `env_parity` — names-only comparison of the vars `start.sh` exports vs this
+  process's environment; the stdio and HTTP/tunnel processes have independent
+  environments, and behaviour differences between clients usually trace back
+  to exactly this. `UNSUPPORTED` (manual check) when `start.sh` is missing.
+
+The report includes `transport` (`stdio`, `streamable-http`, `sse`, or
+`unknown` when not served via `main()`), so you always know which process
+answered.
+
 ## What is still denied
 
 The server still refuses or redacts access to:
@@ -365,7 +394,7 @@ under it. `hermes_git_diff` also refuses a secret-like `pathspec`.
 - Reconnect the connector.
 - Create a new connector name if the old one is cached.
 - Verify `/mcp` directly with list-tools.
-- If direct list-tools shows the full tool count (49 with no `RANDOKU_ENABLE_*` toggles set), the server is fine and the connector registration is stale.
+- If direct list-tools shows the full tool count (50 with no `RANDOKU_ENABLE_*` toggles set), the server is fine and the connector registration is stale.
 
 ### Profile appears missing
 

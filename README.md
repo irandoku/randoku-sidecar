@@ -203,7 +203,7 @@ Operator / Owner Mode is a tiered control plane. The levels form a strict ascend
 
 | Level | Capabilities |
 | --- | --- |
-| `read_only` | status, policy, audit tail, cron list/status, skill diff/list/view, config get, env status, gateway status, git status/diff |
+| `read_only` | status, policy, doctor, audit tail, cron list/status, skill diff/list/view, config get, env status, gateway status, git status/diff |
 | `cron` | + cron run, pause, copy, move |
 | `skills` | + skill create, edit, patch, write_file, copy, sync_to_default, delete |
 | `skills_config` | + config set/patch, env set/copy (non-secret keys only) |
