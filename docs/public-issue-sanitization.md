@@ -89,11 +89,31 @@ satisfies all of the following:
    since the dry-run plan is what the human is expected to review before
    flipping `dry_run` to `false`.
 
+## Label preflight
+
+`gh issue create` fails the whole call if a requested label doesn't exist
+on the repo (`'test' not found`) — it does not create missing labels. When
+`labels` is non-empty, the recipe checks them against `gh label list
+--repo <repo> --json name` (case-insensitive) before building either the
+dry-run or direct result, and surfaces a `label_validation` object
+(`checked`/`existing`/`missing`/`ok`) on every response:
+
+- Dry-run with missing labels still returns `success: true` — it's a
+  preview — but adds a `warnings` entry naming the missing labels, so the
+  human reviewing the plan knows direct execution would be refused.
+- Direct with missing labels returns `success: false` **before** calling
+  `gh issue create`, with an error naming the missing labels. This tool
+  does not create labels automatically; the label must already exist or be
+  removed from the request.
+- `labels=[]`/omitted skips the `gh label list` call entirely
+  (`label_validation.checked` is `false`) and omits `--label` from the
+  constructed argv, same as before this preflight existed.
+
 ## Scope
 
 - PR creation, git push, release/publish operations, a generic GitHub
   toolbox, and arbitrary `gh` command execution remain out of scope — this
   recipe only ever runs `git rev-parse`, `gh auth status`, `gh repo view`,
-  and `gh issue create`.
+  `gh label list`, and `gh issue create`.
 - Tests never invoke real `gh`/`git`; every test fakes the `runner`
   parameter, so no test in this repository performs an external write.

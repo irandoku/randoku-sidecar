@@ -1676,6 +1676,46 @@ def _sanitize_public_issue_body(
     return working, summary
 
 
+def _preflight_labels(
+    label_list: list[str], *, repo_name: str, run_fn, workdir_text: str,
+) -> dict[str, Any]:
+    """Check requested labels against the repo's existing labels via
+    ``gh label list``. Returns a ``label_validation`` dict; raises
+    PermissionError/ValueError on a preflight command failure, same as the
+    other gh/git preflight steps.
+
+    A real smoke test failed with "'test' not found" because the repo had
+    no `test` label — `gh issue create` only creates the *issue*, not
+    missing labels, and fails the whole call. Checking first lets dry-run
+    surface this before a direct call ever runs.
+    """
+    if not label_list:
+        return {"checked": False, "existing": [], "missing": [], "ok": True}
+
+    rc, out, err = run_fn(
+        ["gh", "label", "list", "--repo", repo_name, "--json", "name", "--limit", "200"],
+        timeout=30, workdir=workdir_text,
+    )
+    if rc != 0:
+        raise PermissionError(f"gh label list failed: {op.redact_output(err) or op.redact_output(out)}")
+    try:
+        label_info = json.loads(out)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"gh label list returned invalid JSON: {exc}") from exc
+
+    existing_lower = {
+        str(item.get("name", "")).lower() for item in label_info if isinstance(item, dict)
+    }
+    missing = [label for label in label_list if label.lower() not in existing_lower]
+    existing_requested = [label for label in label_list if label not in missing]
+    return {
+        "checked": True,
+        "existing": existing_requested,
+        "missing": missing,
+        "ok": not missing,
+    }
+
+
 def hermes_owner_repo_issue_create(
     workdir: str,
     title: str,
@@ -1733,6 +1773,11 @@ def hermes_owner_repo_issue_create(
         # public-style assumption rather than trusting an absent field.
         visibility = str(repo_info.get("visibility") or "UNKNOWN").upper()
 
+        label_validation = _preflight_labels(
+            label_list, repo_name=repo_name, run_fn=run_fn, workdir_text=workdir_text,
+        )
+        missing_labels = label_validation["missing"]
+
         sanitized_body, sanitization = _sanitize_public_issue_body(
             body, repo_root=repo_root, allowed_paths=policy.allowed_paths,
         )
@@ -1746,6 +1791,7 @@ def hermes_owner_repo_issue_create(
             "workdir": workdir_text,
             "title": title,
             "labels": label_list,
+            "label_validation": label_validation,
             "sanitization": sanitization,
             "body_len": body_len,
             "body_sha256": body_sha256,
@@ -1757,10 +1803,18 @@ def hermes_owner_repo_issue_create(
             "visibility": visibility,
             "title": title,
             "labels": label_list,
+            "label_validation": label_validation,
             "sanitization": sanitization,
         }
 
         if policy.effective_dry_run(dry_run):
+            warnings: list[str] = []
+            if missing_labels:
+                warnings.append(
+                    f"Missing labels: {', '.join(missing_labels)}. Direct execution will "
+                    "be refused unless labels are removed or created first."
+                )
+
             would_run = [
                 "gh", "issue", "create",
                 "--repo", repo_name,
@@ -1775,6 +1829,7 @@ def hermes_owner_repo_issue_create(
                 "dry_run": True,
                 **base_fields,
                 "would_run": would_run,
+                "warnings": warnings,
                 "requires_user_review": True,
                 "direct_supported": True,
             }
@@ -1795,6 +1850,34 @@ def hermes_owner_repo_issue_create(
         # been confirmed by effective_dry_run above (Owner Mode direct
         # mutation gate, same as the raw owner primitives).
         policy.require_mutation(dry_run)
+
+        if missing_labels:
+            # gh issue create doesn't create missing labels — it fails the
+            # whole call ("'test' not found"), so refuse before attempting
+            # it rather than surfacing that as an opaque gh error.
+            error_msg = (
+                f"Missing labels: {', '.join(missing_labels)}. Refusing to create issue. "
+                "Remove missing labels or create them first."
+            )
+            result = {
+                "success": False,
+                "dry_run": False,
+                **base_fields,
+                "error": error_msg,
+            }
+            op.audit_record(
+                tool="hermes_owner_repo_issue_create",
+                level=policy.level,
+                apply_mode=policy.apply_mode,
+                dry_run=False,
+                success=False,
+                changed=False,
+                summary=f"refused: missing labels repo={repo_name}",
+                content=sanitized_body,
+                error=error_msg,
+                extra=audit_extra,
+            )
+            return json.dumps(result, indent=2)
 
         # Only the sanitized body is ever written to disk, and only for the
         # lifetime of the gh call — deleted in `finally` even on failure.

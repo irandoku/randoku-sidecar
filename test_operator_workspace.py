@@ -809,6 +809,9 @@ def _gh_runner(
     gh_auth_rc=0,
     gh_repo_rc=0,
     gh_repo_json=None,
+    gh_label_list_rc=0,
+    gh_label_list_names=("bug", "owner-mode"),
+    gh_label_list_json="OK",
     gh_issue_create_rc=0,
     gh_issue_create_url="https://github.com/irandoku/randoku-sidecar/issues/42",
     body_files=None,
@@ -836,6 +839,12 @@ def _gh_runner(
             if gh_repo_json == "INVALID_JSON":
                 return (0, "not json", "")
             return (0, json.dumps(gh_repo_json), "")
+        if argv[:3] == ["gh", "label", "list"]:
+            if gh_label_list_rc != 0:
+                return (gh_label_list_rc, "", "gh label list failed")
+            if gh_label_list_json == "INVALID_JSON":
+                return (0, "not json", "")
+            return (0, json.dumps([{"name": n} for n in gh_label_list_names]), "")
         if argv[:3] == ["gh", "issue", "create"]:
             body_file_path = argv[argv.index("--body-file") + 1]
             if body_files is not None:
@@ -1181,6 +1190,163 @@ def test_owner_repo_issue_create_refuses_invalid_gh_repo_view_json(
     parsed = json.loads(out)
     assert parsed["success"] is False
     assert "invalid json" in parsed["error"].lower()
+
+
+# --- Owner Mode: hermes_owner_repo_issue_create label preflight ----------
+#
+# Real smoke test on issue #3: direct creation with labels=["test",
+# "owner-mode"] failed mid-`gh issue create` because the repo had no
+# "test" label ("could not add label: 'test' not found"). Label existence
+# is now checked via `gh label list` before either dry-run or direct build
+# their final result, so a missing label is caught and reported instead of
+# surfacing as an opaque gh failure (or, worse, a partially-created issue).
+
+
+def test_owner_repo_issue_create_dry_run_no_labels_skips_label_preflight(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    calls = []
+    runner = _gh_runner(repo_root=workspace_tree, calls=calls)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["label_validation"] == {"checked": False, "existing": [], "missing": [], "ok": True}
+    assert parsed["warnings"] == []
+    assert "--label" not in parsed["would_run"]
+    assert not any(c[:3] == ["gh", "label", "list"] for c in calls)
+
+
+def test_owner_repo_issue_create_direct_no_labels_succeeds(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    calls = []
+    runner = _gh_runner(repo_root=workspace_tree, calls=calls)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert "--label" not in parsed["argv"]
+    assert not any(c[:3] == ["gh", "label", "list"] for c in calls)
+
+
+def test_owner_repo_issue_create_dry_run_all_labels_exist(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, gh_label_list_names=("bug", "owner-mode"))
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b",
+        labels=["bug", "owner-mode"], dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["label_validation"] == {
+        "checked": True, "existing": ["bug", "owner-mode"], "missing": [], "ok": True,
+    }
+    assert parsed["warnings"] == []
+    assert "--label" in parsed["would_run"]
+    assert "bug,owner-mode" in parsed["would_run"]
+
+
+def test_owner_repo_issue_create_dry_run_missing_labels_warns(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, gh_label_list_names=("owner-mode",))
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b",
+        labels=["test", "owner-mode"], dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["dry_run"] is True
+    assert parsed["label_validation"] == {
+        "checked": True, "existing": ["owner-mode"], "missing": ["test"], "ok": False,
+    }
+    assert len(parsed["warnings"]) == 1
+    assert "test" in parsed["warnings"][0]
+
+
+def test_owner_repo_issue_create_direct_missing_labels_refuses_before_gh_issue_create(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    calls = []
+    runner = _gh_runner(repo_root=workspace_tree, gh_label_list_names=("owner-mode",), calls=calls)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b",
+        labels=["test", "owner-mode"], dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert parsed["dry_run"] is False
+    assert "test" in parsed["error"]
+    assert parsed["label_validation"]["missing"] == ["test"]
+    assert not any(c[:3] == ["gh", "issue", "create"] for c in calls)
+
+
+def test_owner_repo_issue_create_direct_all_labels_exist_creates_issue(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(
+        repo_root=workspace_tree,
+        gh_label_list_names=("bug", "owner-mode"),
+        gh_issue_create_url="https://github.com/irandoku/randoku-sidecar/issues/4",
+    )
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b",
+        labels=["bug", "owner-mode"], dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is True
+    assert parsed["issue_url"] == "https://github.com/irandoku/randoku-sidecar/issues/4"
+    assert parsed["issue_number"] == 4
+
+
+def test_owner_repo_issue_create_label_preflight_failure_blocks_direct(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch, direct=True)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    calls = []
+    runner = _gh_runner(repo_root=workspace_tree, gh_label_list_rc=1, calls=calls)
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b",
+        labels=["bug"], dry_run=False, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert "gh label list" in parsed["error"].lower()
+    assert not any(c[:3] == ["gh", "issue", "create"] for c in calls)
+
+
+def test_owner_repo_issue_create_label_validation_audited_without_raw_body(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree, gh_label_list_names=("owner-mode",))
+    raw_body = "raw body text that must never appear in the audit log"
+    ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=raw_body,
+        labels=["test", "owner-mode"], dry_run=True, runner=runner,
+    )
+    audit_text = audit_override.read_text(encoding="utf-8")
+    assert raw_body not in audit_text
+    record = json.loads(audit_text.strip().splitlines()[-1])
+    assert record["label_validation"]["missing"] == ["test"]
 
 
 def test_tool_registration_includes_owner_repo_issue_create(monkeypatch):
