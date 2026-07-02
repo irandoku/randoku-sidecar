@@ -1571,7 +1571,20 @@ _ISSUE_CREATE_RECIPE = "repo_issue_create"
 _SECRET_BODY_MARKERS: tuple[str, ...] = op.SECRET_PATH_SUBSTRINGS + (".env", ".ssh")
 
 _LOCAL_ENDPOINT_RE = re.compile(r"(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", re.IGNORECASE)
-_NOTES_VAULT_RE = re.compile(r"obsidian|(^|/)vault(/|$)", re.IGNORECASE)
+_NOTES_VAULT_RE = re.compile(r"obsidian|\bvault\b", re.IGNORECASE)
+
+# A path "segment" between slashes may itself contain one embedded space
+# (e.g. macOS's literal "Mobile Documents" under ~/Library, or a two-word
+# vault folder name) — ponytail: caps each segment at two words rather than
+# building a full path grammar; a vault folder name with three+ words can
+# still leak its tail, add a stricter grammar if that surfaces.
+_PATH_SEGMENT = r"[^\s/]+(?:\ [^\s/]+)?"
+# ``~/`` (tilde immediately followed by a slash) is the common case for a
+# home-relative path — the root must consume both characters together, or
+# the mandatory first segment right after a bare "~" fails to match (no
+# segment starts with "/") and the whole span match slides one character
+# to the right, stranding the "~" outside the redacted span.
+_VAULT_SPAN_RE = re.compile(rf"(?:~/?|/)(?:{_PATH_SEGMENT}/)*{_PATH_SEGMENT}")
 
 
 def _looks_path_like(token: str) -> bool:
@@ -1585,34 +1598,46 @@ def _sanitize_public_issue_body(
 
     Runs unconditionally (Phase 4A: always sanitize, regardless of repo
     visibility — simpler and safer than trusting visibility detection).
-    Secret-like tokens are redacted before the coarser repo-root / private-
-    path / home substitutions, so a secret path under the repo root or home
-    directory collapses fully to ``<secret-like-path>`` rather than leaking
-    a partially-redacted prefix.
+
+    Redaction order, most sensitive first, so nothing partially redacted
+    leaks a prefix/suffix fragment of something more sensitive:
+    1. notes-vault paths (whole span, see _VAULT_SPAN_RE — these can contain
+       embedded spaces, so they must be found before whitespace-tokenizing)
+    2. secret-like paths and local endpoints (per whitespace token)
+    3. repo-root / other allowed paths / home (whole-string substitution)
     """
     original = text or ""
-    secret_count = 0
     vault_count = 0
+    secret_count = 0
     endpoint_count = 0
 
+    def _redact_vault_span(match: "re.Match[str]") -> str:
+        nonlocal vault_count
+        span = match.group(0)
+        if _NOTES_VAULT_RE.search(span):
+            vault_count += 1
+            return "<private-notes-vault>"
+        return span
+
+    working = _VAULT_SPAN_RE.sub(_redact_vault_span, original)
+
     def _redact_token(match: "re.Match[str]") -> str:
-        nonlocal secret_count, vault_count, endpoint_count
+        nonlocal secret_count, endpoint_count
         token = match.group(0)
+        if "<" in token and ">" in token:
+            return token  # already a placeholder from the vault-span pass
         lowered = token.lower()
         if _looks_path_like(token):
             basename = token.rsplit("/", 1)[-1].lower()
             if any(marker in basename for marker in _SECRET_BODY_MARKERS):
                 secret_count += 1
                 return "<secret-like-path>"
-        if _NOTES_VAULT_RE.search(lowered):
-            vault_count += 1
-            return "<private-notes-vault>"
         if _LOCAL_ENDPOINT_RE.search(lowered):
             endpoint_count += 1
             return "<local-endpoint>"
         return token
 
-    working = re.sub(r"\S+", _redact_token, original)
+    working = re.sub(r"\S+", _redact_token, working)
 
     repo_root_text = str(repo_root)
     repo_root_count = working.count(repo_root_text)

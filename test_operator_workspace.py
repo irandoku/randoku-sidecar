@@ -978,6 +978,53 @@ def test_owner_repo_issue_create_sanitizes_secret_like_paths(
     assert parsed["sanitization"]["secret_like_terms_redacted"] >= 2
 
 
+def test_owner_repo_issue_create_sanitizes_notes_vault_path_with_spaces(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    """Regression: a real macOS Obsidian iCloud vault path has a space
+    inside a directory name ("Mobile Documents"). The whole path must
+    collapse to one <private-notes-vault> placeholder — it must not leak a
+    "<home>/Library/Mobile" fragment split off by whitespace tokenizing."""
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    vault_path = (
+        f"{Path.home()}/Library/Mobile Documents/iCloud~md~obsidian/"
+        "Documents/Notes Vault/2026-07-02.md"
+    )
+    body = f"Repro steps: {vault_path}."
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=body, dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert "<private-notes-vault>" in parsed["body_preview"]
+    assert "Mobile" not in parsed["body_preview"]
+    assert "<home>/Library" not in parsed["body_preview"]
+    assert str(Path.home()) not in parsed["body_preview"]
+    assert parsed["sanitization"]["notes_vault_redacted"] >= 1
+
+
+def test_owner_repo_issue_create_sanitizes_literal_tilde_vault_path(
+    workspace_tree, clean_env, audit_override, monkeypatch
+):
+    """Regression: a literal "~/" (tilde immediately followed by a slash,
+    as users typically type it) must not strand the "~" outside the
+    redacted span — a stray "~<private-notes-vault>" token used to get
+    re-matched by the secret-marker check (the placeholder text itself
+    contains "private") and overwritten to <secret-like-path>."""
+    _enable_owner(monkeypatch)
+    monkeypatch.setenv(op.OPERATOR_ALLOWED_PATHS_ENV, str(workspace_tree))
+    runner = _gh_runner(repo_root=workspace_tree)
+    body = "See ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Notes Vault/note.md for the repro."
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body=body, dry_run=True, runner=runner,
+    )
+    parsed = json.loads(out)
+    assert parsed["body_preview"] == "See <private-notes-vault> the repro."
+    assert parsed["sanitization"]["notes_vault_redacted"] == 1
+    assert parsed["sanitization"]["secret_like_terms_redacted"] == 0
+
+
 def test_owner_repo_issue_create_audit_omits_raw_body(
     workspace_tree, clean_env, audit_override, monkeypatch
 ):
