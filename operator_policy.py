@@ -23,6 +23,7 @@ import json
 import os
 import re
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -867,6 +868,143 @@ def redact_output(text: str) -> str:
     for pattern, repl in patterns:
         out = re.sub(pattern, repl, out)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic status vocabulary and structured error envelope
+# ---------------------------------------------------------------------------
+
+# One core vocabulary. Blocking severity is metadata ({"blocking": true} next
+# to a FAIL), never a fifth status. UNSUPPORTED means "this tool cannot or
+# should not do it; manual action required" — it is not a runtime failure.
+STATUS_PASS = "PASS"
+STATUS_WARN = "WARN"
+STATUS_FAIL = "FAIL"
+STATUS_UNSUPPORTED = "UNSUPPORTED"
+
+_ERROR_LAYERS: frozenset[str] = frozenset(
+    {
+        "operator",
+        "policy",
+        "config",
+        "env",
+        "cron",
+        "skills",
+        "gateway",
+        "workspace",
+        "owner",
+        "memory",
+        "session",
+        "codegraph",
+        "audit",
+        "connector",
+        "release",
+        "system",
+    }
+)
+
+
+def new_trace_id() -> str:
+    """Return a short random id for correlating one failure across the tool
+    response and the audit log."""
+    return uuid.uuid4().hex[:16]
+
+
+# Path spans in error text: /-rooted or ~-rooted, no embedded spaces.
+# ponytail: unlike operator_workspace's vault-span regex this does not allow
+# a space inside a segment — exception text mixes paths with prose, and the
+# one-embedded-space rule would swallow the word after a path. A vault dir
+# with a space in its name loses span continuity but the marker-bearing part
+# still starts at a "/" and gets caught.
+_ERROR_PATH_SPAN_RE = re.compile(r"(?:~/?|/)[^\s'\"]+")
+_ERROR_NOTES_VAULT_RE = re.compile(r"obsidian|\bvault\b", re.IGNORECASE)
+_ERROR_SECRET_BASENAME_MARKERS: tuple[str, ...] = SECRET_PATH_SUBSTRINGS + (".env", ".ssh")
+
+
+def sanitize_error_message(text: str, limit: int = 500) -> str:
+    """Make exception/error text safe for MCP clients, keeping it actionable.
+
+    - secret-looking values are redacted (same patterns as redact_output)
+    - notes-vault paths are removed as a whole span
+    - other absolute/home paths keep only their basename (".../<name>"),
+      or are fully redacted when the basename itself looks secret-like
+    - the result is capped at ``limit`` chars
+    """
+    if not text:
+        return ""
+    out = redact_output(text)
+
+    def _redact_span(match: "re.Match[str]") -> str:
+        span = match.group(0)
+        if _ERROR_NOTES_VAULT_RE.search(span):
+            return "<private-notes-vault>"
+        basename = span.rstrip("/").rsplit("/", 1)[-1]
+        if any(marker in basename.lower() for marker in _ERROR_SECRET_BASENAME_MARKERS):
+            return "<secret-like-path>"
+        return f".../{basename}"
+
+    out = _ERROR_PATH_SPAN_RE.sub(_redact_span, out)
+    return out[:limit]
+
+
+def make_error_envelope(
+    *,
+    layer: str,
+    code: str,
+    safe_message: str,
+    suggested_action: str,
+    trace_id: str | None = None,
+    legacy_error: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a structured envelope for operator-facing failures.
+
+    Legacy compatibility: ``success: false`` and ``error`` are always present
+    so existing clients and prompts keep working.
+    """
+    if layer not in _ERROR_LAYERS:
+        layer = "operator"
+    if not code:
+        code = "UNKNOWN_ERROR"
+    if not safe_message:
+        safe_message = "An operator error occurred."
+    if not suggested_action:
+        suggested_action = "Check hermes_operator_status and hermes_operator_audit_tail."
+    envelope: dict[str, Any] = {
+        "success": False,
+        "ok": False,
+        "error": legacy_error or safe_message,
+        "layer": layer,
+        "code": code,
+        "safe_message": safe_message,
+        "suggested_action": suggested_action,
+        "trace_id": trace_id or new_trace_id(),
+    }
+    if extra:
+        for key, value in extra.items():
+            envelope[key] = value[:500] if isinstance(value, str) else value
+    return envelope
+
+
+def error_from_exception(
+    exc: Exception,
+    *,
+    layer: str,
+    code: str,
+    suggested_action: str,
+    trace_id: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an error envelope from an exception, sanitizing its message."""
+    safe_message = sanitize_error_message(str(exc))
+    return make_error_envelope(
+        layer=layer,
+        code=code,
+        safe_message=safe_message,
+        suggested_action=suggested_action,
+        trace_id=trace_id,
+        extra=extra,
+    )
 
 
 # ---------------------------------------------------------------------------

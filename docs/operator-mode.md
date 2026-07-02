@@ -305,6 +305,38 @@ What is never logged:
 
 Prompt/content is represented by length and hash only, not raw text.
 
+## Structured errors and status vocabulary
+
+Diagnostic results use one core status vocabulary: `PASS`, `WARN`, `FAIL`,
+`UNSUPPORTED`. `UNSUPPORTED` means the tool cannot or should not perform the
+action and manual action is required — it is not a runtime failure. Blocking
+severity is metadata (`"blocking": true` next to a `FAIL`), never a fifth
+status.
+
+Operator-facing failures are being converted incrementally to a structured
+error envelope (helpers in `operator_policy.py`):
+
+```json
+{
+  "success": false,
+  "ok": false,
+  "error": "...",
+  "layer": "policy",
+  "code": "PERMISSION_DENIED",
+  "safe_message": "...",
+  "suggested_action": "...",
+  "trace_id": "0123456789abcdef"
+}
+```
+
+`success` and `error` are kept for legacy clients. `trace_id` correlates the
+response with its audit record. Messages are sanitized before leaving the
+server: secret-looking values are redacted, notes-vault paths are removed as
+a whole span, and other local paths keep only their basename. Converted so
+far: `hermes_owner_repo_issue_create` failures and `hermes_operator_policy`;
+remaining raw `{"success": false, "error": ...}` responses migrate in later
+issues.
+
 ## What is still denied
 
 The server still refuses or redacts access to:

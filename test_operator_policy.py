@@ -495,3 +495,99 @@ def test_run_argv_handles_missing_executable():
     rc, out, err = op.run_argv(["this-binary-does-not-exist-xyz"], timeout=5)
     assert rc == 127
     assert err  # non-empty error
+
+
+# ---------------------------------------------------------------------------
+# Status vocabulary + structured error envelope (issue #7)
+# ---------------------------------------------------------------------------
+
+
+def test_status_vocabulary_constants():
+    assert op.STATUS_PASS == "PASS"
+    assert op.STATUS_WARN == "WARN"
+    assert op.STATUS_FAIL == "FAIL"
+    assert op.STATUS_UNSUPPORTED == "UNSUPPORTED"
+
+
+def test_new_trace_id_format():
+    tid = op.new_trace_id()
+    assert len(tid) == 16
+    assert all(c in "0123456789abcdef" for c in tid)
+    assert tid != op.new_trace_id()
+
+
+def test_make_error_envelope_shape_and_legacy_fields():
+    env = op.make_error_envelope(
+        layer="policy",
+        code="PERMISSION_DENIED",
+        safe_message="operator level too low",
+        suggested_action="Raise RANDOKU_OPERATOR_LEVEL.",
+    )
+    # Legacy compatibility fields.
+    assert env["success"] is False
+    assert env["error"] == "operator level too low"
+    # Structured fields.
+    assert env["ok"] is False
+    assert env["layer"] == "policy"
+    assert env["code"] == "PERMISSION_DENIED"
+    assert env["safe_message"] == "operator level too low"
+    assert env["suggested_action"] == "Raise RANDOKU_OPERATOR_LEVEL."
+    assert len(env["trace_id"]) == 16
+
+
+def test_make_error_envelope_defaults_and_extra_capping():
+    env = op.make_error_envelope(
+        layer="not-a-real-layer",
+        code="",
+        safe_message="",
+        suggested_action="",
+        extra={"detail": "x" * 900, "count": 3},
+    )
+    assert env["layer"] == "operator"
+    assert env["code"] == "UNKNOWN_ERROR"
+    assert env["safe_message"]
+    assert env["suggested_action"]
+    assert len(env["detail"]) == 500
+    assert env["count"] == 3
+
+
+def test_sanitize_error_message_redacts_secrets_and_paths():
+    msg = (
+        "config load failed: api_key=abcdef12345678 while reading "
+        "/Users/someone/Projects/app/config.yaml"
+    )
+    out = op.sanitize_error_message(msg)
+    assert "abcdef12345678" not in out
+    assert "/Users/someone" not in out
+    # Actionable context survives: the failure verb and the basename.
+    assert "config load failed" in out
+    assert "config.yaml" in out
+
+
+def test_sanitize_error_message_redacts_vault_and_secret_basenames():
+    out = op.sanitize_error_message(
+        "cannot read ~/Documents/ObsidianVault/daily/note.md or /home/u/.env"
+    )
+    assert "<private-notes-vault>" in out
+    assert "ObsidianVault" not in out
+    assert "note.md" not in out
+    assert "<secret-like-path>" in out
+    assert ".env" not in out.replace("<secret-like-path>", "")
+
+
+def test_sanitize_error_message_caps_length():
+    assert len(op.sanitize_error_message("y " + "/a/b " * 500)) <= 500
+    assert op.sanitize_error_message("") == ""
+
+
+def test_error_from_exception_sanitizes_message():
+    exc = FileNotFoundError(
+        "[Errno 2] No such file or directory: '/Users/someone/secret-token/config.yaml'"
+    )
+    env = op.error_from_exception(
+        exc, layer="config", code="CONFIG_READ_FAILED", suggested_action="Check the profile.",
+    )
+    assert env["success"] is False
+    assert env["layer"] == "config"
+    assert "/Users/someone" not in json.dumps(env)
+    assert "No such file or directory" in env["safe_message"]

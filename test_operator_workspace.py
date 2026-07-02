@@ -866,6 +866,22 @@ def test_owner_repo_issue_create_refuses_without_owner(workspace_tree, clean_env
     assert "operator mode is disabled" in parsed["error"].lower()
 
 
+def test_owner_repo_issue_create_policy_refusal_is_enveloped(workspace_tree, clean_env, audit_override):
+    """Representative converted error path (issue #7): policy refusals carry
+    the structured envelope on top of the legacy success/error fields."""
+    out = ows.hermes_owner_repo_issue_create(
+        workdir=str(workspace_tree), title="t", body="b", dry_run=True,
+    )
+    parsed = json.loads(out)
+    assert parsed["success"] is False
+    assert parsed["ok"] is False
+    assert parsed["layer"] == "policy"
+    assert parsed["code"] == "PERMISSION_DENIED"
+    assert parsed["safe_message"] == parsed["error"]
+    assert parsed["suggested_action"]
+    assert len(parsed["trace_id"]) == 16
+
+
 def test_owner_repo_issue_create_refuses_without_ack(workspace_tree, clean_env, audit_override, monkeypatch):
     _enable_owner(monkeypatch, ack=False)
     out = ows.hermes_owner_repo_issue_create(

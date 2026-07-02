@@ -1952,12 +1952,23 @@ def hermes_owner_repo_issue_create(
         )
         return json.dumps(result, indent=2)
     except Exception as exc:
+        envelope = op.error_from_exception(
+            exc,
+            layer="policy" if isinstance(exc, PermissionError) else "owner",
+            code="PERMISSION_DENIED" if isinstance(exc, PermissionError) else "ISSUE_CREATE_FAILED",
+            suggested_action=(
+                "Check hermes_operator_policy for the active gates."
+                if isinstance(exc, PermissionError)
+                else "Re-run with dry_run=true and check hermes_operator_audit_tail for this trace_id."
+            ),
+        )
         op.audit_record(
             tool="hermes_owner_repo_issue_create",
             level="owner",
             apply_mode="unknown",
             dry_run=dry_run,
             success=False,
-            error=str(exc),
+            error=envelope["safe_message"],
+            extra={"trace_id": envelope["trace_id"], "code": envelope["code"]},
         )
-        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+        return json.dumps(envelope, indent=2)

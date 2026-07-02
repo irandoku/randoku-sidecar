@@ -742,7 +742,13 @@ def hermes_operator_policy() -> str:
         summary["success"] = True
         return json.dumps(summary, indent=2)
     except Exception as exc:
-        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+        envelope = op_policy.error_from_exception(
+            exc,
+            layer="policy",
+            code="POLICY_SUMMARY_FAILED",
+            suggested_action="Check the RANDOKU_OPERATOR_* environment variables.",
+        )
+        return json.dumps(envelope, indent=2)
 
 
 def hermes_operator_status() -> str:
