@@ -575,6 +575,27 @@ def test_release_doctor_blocks_on_failing_tests(monkeypatch):
     assert checks["tests"]["blocking"] is True
 
 
+def test_release_doctor_no_false_drift_with_env_gates(monkeypatch):
+    """Regression (issue #9 smoke test): a gated process (e.g. the tunnel with
+    session search on) must not report doc drift — the documented count is the
+    no-toggles baseline."""
+    clear_gate_envs(monkeypatch)
+    monkeypatch.setenv(server.ENABLE_SESSION_SEARCH_ENV, "1")
+    monkeypatch.setenv(server.ENABLE_WRITE_ENV, "1")
+    server.build_server()
+
+    checks = server._release_doctor_impl(False, 60, runner=_fake_git_runner())
+
+    assert checks["docs_tool_count"]["status"] == "PASS"
+    assert set(checks["docs_tool_count"]["details"]["env_gated_registered"]) == {
+        "hermes_session_search",
+        "hermes_session_read",
+        "hermes_session_recall",
+        "hermes_write_file",
+        "hermes_patch",
+    }
+
+
 def test_release_doctor_detects_doc_count_drift(monkeypatch):
     clear_gate_envs(monkeypatch)
     server.build_server()

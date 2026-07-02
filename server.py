@@ -1078,6 +1078,19 @@ _SECRET_FILE_MARKERS: tuple[str, ...] = op_policy.SECRET_PATH_SUBSTRINGS + (
 # documented tool count can be verified against the real registry.
 _DOCS_TOOL_COUNT_RE = re.compile(r"full tool count \((\d+)")
 
+# Tools that only exist when a RANDOKU_ENABLE_* gate is set. The documented
+# count is the no-toggles baseline, so these are subtracted from the runtime
+# registry before comparing — otherwise a gated process (e.g. the tunnel with
+# session search on) reports false doc drift.
+_ENV_GATED_TOOLS = frozenset({
+    "hermes_write_file",
+    "hermes_patch",
+    "hermes_run_command",
+    "hermes_session_search",
+    "hermes_session_read",
+    "hermes_session_recall",
+})
+
 
 def _release_check(
     status: str,
@@ -1192,28 +1205,32 @@ def _release_doctor_impl(full_tests: bool, timeout: int, runner=None) -> dict[st
         )
 
     # 5. Doc drift: the tool count documented in operator-mode.md must match
-    # the real registry (the sentence went stale once already).
+    # the real registry (the sentence went stale once already). The doc states
+    # the no-toggles baseline, so env-gated tools registered in this process
+    # are subtracted before comparing.
     doc_path = repo_root / "docs" / "operator-mode.md"
     doc_match = _DOCS_TOOL_COUNT_RE.search(doc_path.read_text(encoding="utf-8")) if doc_path.is_file() else None
-    actual_count = len(REGISTERED_TOOL_NAMES)
+    gated_registered = sorted(set(REGISTERED_TOOL_NAMES) & _ENV_GATED_TOOLS)
+    baseline_count = len(REGISTERED_TOOL_NAMES) - len(gated_registered)
     if doc_match is None:
         checks["docs_tool_count"] = _release_check(
             op_policy.STATUS_WARN, "DOC_COUNT_NOT_FOUND",
             "docs/operator-mode.md no longer states the full tool count.",
             "Restore the troubleshooting sentence or update this check.",
         )
-    elif int(doc_match.group(1)) != actual_count:
+    elif int(doc_match.group(1)) != baseline_count:
         checks["docs_tool_count"] = _release_check(
             op_policy.STATUS_WARN, "DOC_COUNT_DRIFT",
-            f"docs/operator-mode.md says {doc_match.group(1)} tools; registry has {actual_count}.",
+            f"docs/operator-mode.md says {doc_match.group(1)} tools; the no-toggles "
+            f"baseline is {baseline_count}.",
             "Update the documented tool count.", documented=int(doc_match.group(1)),
-            actual=actual_count,
+            baseline=baseline_count, env_gated_registered=gated_registered,
         )
     else:
         checks["docs_tool_count"] = _release_check(
             op_policy.STATUS_PASS, "OK",
-            f"Documented tool count matches the registry ({actual_count}).",
-            "No action needed.",
+            f"Documented tool count matches the no-toggles baseline ({baseline_count}).",
+            "No action needed.", env_gated_registered=gated_registered,
         )
 
     # 6. Release posture: releases should be cut from a dry-run posture.

@@ -377,8 +377,9 @@ bounded by `timeout` (default 300s).
 Checks: tracked-file syntax (in-process compile), secret-like tracked
 filenames (names only, blocking), dirty working tree, pyproject version
 mentioned in CHANGELOG.md, the documented tool count in this file vs the
-real registry, elevated operator posture during release, and the opt-in
-test run. Blocking problems are `FAIL` with `"blocking": true` metadata —
+no-toggles baseline (env-gated tools are subtracted from the runtime
+registry first, so a gated process does not report false drift), elevated
+operator posture during release, and the opt-in test run. Blocking problems are `FAIL` with `"blocking": true` metadata —
 there is no separate `BLOCKED` status.
 
 ## What is still denied
